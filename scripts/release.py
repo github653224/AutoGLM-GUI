@@ -90,7 +90,7 @@ def update_pyproject_version(new_version: str) -> bool:
 
 def git_commit_version(version: str, dry_run: bool = False) -> bool:
     """Commit pyproject.toml with version bump."""
-    print(f"Committing version bump to git...")
+    print("Committing version bump to git...")
 
     if dry_run:
         print("[DRY RUN] Would run: git add pyproject.toml")
@@ -100,7 +100,7 @@ def git_commit_version(version: str, dry_run: bool = False) -> bool:
     try:
         # Stage pyproject.toml
         result = subprocess.run(
-            ["git", "add", "pyproject.toml"],
+            ["git", "add", "pyproject.toml", "uv.lock"],
             cwd=ROOT_DIR,
             capture_output=True,
             text=True,
@@ -160,6 +160,30 @@ def create_git_tag(version: str, dry_run: bool = False) -> bool:
         return False
 
 
+def run_uv_sync() -> bool:
+    """Run uv sync to synchronize dependencies."""
+    print("Running uv sync...")
+
+    try:
+        result = subprocess.run(
+            ["uv", "sync"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            print(f"Error running uv sync: {result.stderr}")
+            return False
+
+        print("Dependencies synchronized successfully.")
+        return True
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return False
+
+
 def main() -> int:
     """Main release process."""
     parser = argparse.ArgumentParser(description="Release AutoGLM-GUI with version bump")
@@ -208,6 +232,11 @@ def main() -> int:
         if not update_pyproject_version(new_version):
             return 1
         print()
+
+    ## run uv sync
+    if not args.dry_run:
+        if not run_uv_sync():
+            return 1
 
     if not git_commit_version(new_version, dry_run=args.dry_run):
         return 1
