@@ -226,7 +226,8 @@ scripts/build.py       # Build automation
 
 1. Make frontend changes → `cd frontend && pnpm dev` (hot reload)
 2. Make backend changes → `uv run autoglm-gui --reload` (auto-reload enabled)
-3. Before package release:
+3. Before committing code, run backend linting: `uv run python scripts/lint.py`
+4. Before package release:
    - Build frontend: `uv run python scripts/build.py`
    - Test locally: `uv run autoglm-gui`
    - Build package: `uv run python scripts/build.py --pack`
