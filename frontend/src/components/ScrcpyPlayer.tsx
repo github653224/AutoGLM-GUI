@@ -13,6 +13,7 @@ const MIN_SWIPE_DISTANCE = 3; // Minimum distance in pixels to qualify as a swip
 const WHEEL_DELAY_MS = 400; // Debounce delay for wheel events
 const MOTION_THROTTLE_MS = 50; // Throttle for motion events (50ms = 20 events/sec)
 interface ScrcpyPlayerProps {
+  deviceId: string; // 设备 ID（必填）
   className?: string;
   onFallback?: () => void; // Callback when fallback to screenshot is needed
   fallbackTimeout?: number; // Timeout in ms before fallback (default 5000)
@@ -21,9 +22,11 @@ interface ScrcpyPlayerProps {
   onTapError?: (error: string) => void; // Callback on tap error
   onSwipeSuccess?: () => void; // Callback on successful swipe
   onSwipeError?: (error: string) => void; // Callback on swipe error
+  onStreamReady?: (stream: { close: () => void } | null) => void; // Callback when video stream is ready
 }
 
 export function ScrcpyPlayer({
+  deviceId,
   className,
   onFallback,
   fallbackTimeout = 5000,
@@ -32,10 +35,12 @@ export function ScrcpyPlayer({
   onTapError,
   onSwipeSuccess,
   onSwipeError,
+  onStreamReady,
 }: ScrcpyPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const jmuxerRef = useRef<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const deviceIdRef = useRef<string>(deviceId); // Store current deviceId for reconnect logic
   const [status, setStatus] = useState<
     'connecting' | 'connected' | 'error' | 'disconnected'
   >('connecting');
@@ -202,8 +207,8 @@ export function ScrcpyPlayer({
     const actualDeviceY = Math.round(deviceCoords.y * scaleY);
 
     try {
-      await sendTouchDown(actualDeviceX, actualDeviceY);
-      console.log(`[Touch] DOWN: (${actualDeviceX}, ${actualDeviceY})`);
+      await sendTouchDown(actualDeviceX, actualDeviceY, deviceId);
+      console.log(`[Touch] DOWN: (${actualDeviceX}, ${actualDeviceY}) for device ${deviceId}`);
     } catch (error) {
       console.error('[Touch] DOWN failed:', error);
     }
@@ -248,7 +253,7 @@ export function ScrcpyPlayer({
     if (now - lastMoveTimeRef.current >= MOTION_THROTTLE_MS) {
       // Send immediately
       lastMoveTimeRef.current = now;
-      sendTouchMove(actualDeviceX, actualDeviceY).catch(error => {
+      sendTouchMove(actualDeviceX, actualDeviceY, deviceId).catch(error => {
         console.error('[Touch] MOVE failed:', error);
       });
     } else {
@@ -264,7 +269,7 @@ export function ScrcpyPlayer({
           if (pendingMoveRef.current) {
             const { x, y } = pendingMoveRef.current;
             lastMoveTimeRef.current = Date.now();
-            sendTouchMove(x, y).catch(error => {
+            sendTouchMove(x, y, deviceId).catch(error => {
               console.error('[Touch] MOVE (throttled) failed:', error);
             });
             pendingMoveRef.current = null;
@@ -331,8 +336,8 @@ export function ScrcpyPlayer({
     const actualDeviceY = Math.round(deviceCoords.y * scaleY);
 
     try {
-      await sendTouchUp(actualDeviceX, actualDeviceY);
-      console.log(`[Touch] UP: (${actualDeviceX}, ${actualDeviceY})`);
+      await sendTouchUp(actualDeviceX, actualDeviceY, deviceId);
+      console.log(`[Touch] UP: (${actualDeviceX}, ${actualDeviceY}) for device ${deviceId}`);
       onTapSuccess?.();
     } catch (error) {
       console.error('[Touch] UP failed:', error);
@@ -506,7 +511,8 @@ export function ScrcpyPlayer({
           startY,
           actualCenterX,
           endY,
-          swipeDuration
+          swipeDuration,
+          deviceId
         );
 
         if (result.success) {
@@ -580,7 +586,8 @@ export function ScrcpyPlayer({
         actualStartY,
         actualEndX,
         actualEndY,
-        durationMs
+        durationMs,
+        deviceId
       );
 
       if (result.success) {
@@ -654,7 +661,7 @@ export function ScrcpyPlayer({
 
     // Send tap command with actual device coordinates
     try {
-      const result = await sendTap(actualDeviceX, actualDeviceY);
+      const result = await sendTap(actualDeviceX, actualDeviceY, deviceId);
       if (result.success) {
         onTapSuccess?.();
       } else {
@@ -675,14 +682,14 @@ export function ScrcpyPlayer({
   useEffect(() => {
     const fetchDeviceResolution = async () => {
       try {
-        const screenshot = await getScreenshot();
+        const screenshot = await getScreenshot(deviceId);
         if (screenshot.success) {
           setDeviceResolution({
             width: screenshot.width,
             height: screenshot.height,
           });
           console.log(
-            `[ScrcpyPlayer] Device actual resolution: ${screenshot.width}x${screenshot.height}`
+            `[ScrcpyPlayer] Device actual resolution: ${screenshot.width}x${screenshot.height} for device ${deviceId}`
           );
         }
       } catch (error) {
@@ -694,9 +701,12 @@ export function ScrcpyPlayer({
     };
 
     fetchDeviceResolution();
-  }, []);
+  }, [deviceId]);
 
   useEffect(() => {
+    // Update deviceId ref to always have the latest value
+    deviceIdRef.current = deviceId;
+
     let reconnectTimeout: NodeJS.Timeout | null = null;
     let connectFn: (() => void) | null = null; // Reference to connect function
 
@@ -785,10 +795,17 @@ export function ScrcpyPlayer({
                   '[jMuxer] ⚠️ Buffer error detected, reconnecting...'
                 );
 
-                // Immediate reconnect
+                // Immediate reconnect (but only if device hasn't changed)
+                const errorDeviceId = currentDeviceId;
                 if (connectFn) {
                   setTimeout(() => {
-                    connectFn!();
+                    if (deviceIdRef.current === errorDeviceId) {
+                      connectFn!();
+                    } else {
+                      console.log(
+                        `[jMuxer] Device changed (${errorDeviceId} -> ${deviceIdRef.current}), skip reconnect`
+                      );
+                    }
                   }, 100);
                 }
               } else {
@@ -800,14 +817,28 @@ export function ScrcpyPlayer({
           },
         });
 
-        // Connect WebSocket
-        const ws = new WebSocket('ws://localhost:8000/api/video/stream');
+        // Connect WebSocket (with device_id parameter)
+        // Use deviceIdRef.current to always get the latest deviceId, even during reconnects
+        const currentDeviceId = deviceIdRef.current;
+        const wsUrl = `ws://localhost:8000/api/video/stream?device_id=${encodeURIComponent(currentDeviceId)}`;
+        const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
         ws.binaryType = 'arraybuffer';
 
         ws.onopen = () => {
-          console.log('[ScrcpyPlayer] WebSocket connected');
+          console.log(
+            `[ScrcpyPlayer] WebSocket connected for device ${currentDeviceId}`
+          );
           setStatus('connected');
+
+          // Notify parent component that video stream is ready
+          if (onStreamReady) {
+            onStreamReady({
+              close: () => {
+                ws.close();
+              },
+            });
+          }
 
           // Start fallback timer
           fallbackTimerRef.current = setTimeout(() => {
@@ -910,10 +941,24 @@ export function ScrcpyPlayer({
           console.log('[ScrcpyPlayer] WebSocket closed');
           setStatus('disconnected');
 
+          // Notify parent component that video stream is disconnected
+          if (onStreamReady) {
+            onStreamReady(null);
+          }
+
           // Auto-reconnect after 3 seconds
+          // But only if we're still on the same device
+          const closedDeviceId = currentDeviceId; // Capture device ID at close time
           reconnectTimeout = setTimeout(() => {
-            console.log('[ScrcpyPlayer] Attempting to reconnect...');
-            connect();
+            // Check if device hasn't changed before reconnecting
+            if (deviceIdRef.current === closedDeviceId) {
+              console.log('[ScrcpyPlayer] Attempting to reconnect...');
+              connect();
+            } else {
+              console.log(
+                `[ScrcpyPlayer] Device changed (${closedDeviceId} -> ${deviceIdRef.current}), skip reconnect`
+              );
+            }
           }, 3000);
         };
       } catch (error) {
@@ -959,7 +1004,7 @@ export function ScrcpyPlayer({
         jmuxerRef.current = null;
       }
     };
-  }, []); // Empty deps: only run once on mount
+  }, [deviceId]); // Re-connect when device changes
 
   return (
     <div
@@ -996,8 +1041,8 @@ export function ScrcpyPlayer({
                 const y = Math.round(deviceCoords.y * scaleY);
 
                 try {
-                  await sendTouchUp(x, y);
-                  console.log('[Touch] UP (mouse leave)');
+                  await sendTouchUp(x, y, deviceId);
+                  console.log(`[Touch] UP (mouse leave) for device ${deviceId}`);
                 } catch (error) {
                   console.error('[Touch] UP (mouse leave) failed:', error);
                 }
