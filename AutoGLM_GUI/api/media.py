@@ -1,6 +1,8 @@
 """Media routes: screenshot, video stream, stream reset."""
 
 import asyncio
+import os
+from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -10,6 +12,9 @@ from AutoGLM_GUI.scrcpy_stream import ScrcpyStreamer
 from AutoGLM_GUI.state import scrcpy_locks, scrcpy_streamers
 
 router = APIRouter()
+
+# Debug configuration: Set DEBUG_SAVE_VIDEO_STREAM=1 to save streams to debug_streams/
+DEBUG_SAVE_STREAM = os.getenv("DEBUG_SAVE_VIDEO_STREAM", "0") == "1"
 
 
 @router.post("/api/video/reset")
@@ -81,14 +86,9 @@ async def video_stream_ws(
 
     print(f"[video/stream] WebSocket connection for device {device_id}")
 
-    # Debug: Save stream to file for analysis
-    # Set to True for debugging (default: False)
-    debug_save = False
+    # Debug: Save stream to file for analysis (controlled by DEBUG_SAVE_VIDEO_STREAM env var)
     debug_file = None
-    if debug_save:
-        import os
-        from pathlib import Path
-
+    if DEBUG_SAVE_STREAM:
         debug_dir = Path("debug_streams")
         debug_dir.mkdir(exist_ok=True)
         debug_file_path = debug_dir / f"{device_id}_{int(__import__('time').time())}.h264"
@@ -110,46 +110,45 @@ async def video_stream_ws(
                 await scrcpy_streamers[device_id].start()
                 print(f"[video/stream] Scrcpy server started for device {device_id}")
 
-                # Read initial chunks and accumulate into a single buffer
-                # Then parse the entire buffer to find complete NAL units
+                # Read NAL units until we have SPS, PPS, and IDR
                 streamer = scrcpy_streamers[device_id]
-                accumulated_buffer = bytearray()
-                target_size = 50 * 1024  # Accumulate at least 50KB
 
-                print(f"[video/stream] Accumulating initial data (target: {target_size} bytes)...")
-                for attempt in range(10):
+                print("[video/stream] Reading NAL units for initialization...")
+                for attempt in range(20):  # Max 20 NAL units for initialization
                     try:
-                        # Disable auto-caching - we'll parse the entire buffer at once
-                        chunk = await streamer.read_h264_chunk(auto_cache=False)
-                        accumulated_buffer.extend(chunk)
+                        nal_unit = await streamer.read_nal_unit(auto_cache=True)
+                        nal_type = nal_unit[4] & 0x1F if len(nal_unit) > 4 else -1
+                        nal_type_names = {5: "IDR", 7: "SPS", 8: "PPS"}
                         print(
-                            f"[video/stream] Read chunk ({len(chunk)} bytes, total: {len(accumulated_buffer)} bytes)"
+                            f"[video/stream] Read NAL unit: type={nal_type_names.get(nal_type, nal_type)}, size={len(nal_unit)} bytes"
                         )
+
+                        # Check if we have all required parameter sets
+                        if (
+                            streamer.cached_sps
+                            and streamer.cached_pps
+                            and streamer.cached_idr
+                        ):
+                            print(
+                                f"[video/stream] ✓ Initialization complete: SPS={len(streamer.cached_sps)}B, PPS={len(streamer.cached_pps)}B, IDR={len(streamer.cached_idr)}B"
+                            )
+                            break
                     except Exception as e:
-                        print(f"[video/stream] Failed to read chunk: {e}")
+                        print(f"[video/stream] Failed to read NAL unit: {e}")
                         await asyncio.sleep(0.5)
                         continue
 
-                    # Check if we have enough data
-                    if len(accumulated_buffer) >= target_size:
-                        break
-
-                # Now parse the entire accumulated buffer at once
-                # This ensures NAL units spanning multiple chunks are detected as complete
-                print(f"[video/stream] Parsing accumulated buffer ({len(accumulated_buffer)} bytes)...")
-                streamer._cache_nal_units(bytes(accumulated_buffer))
-
-                # Get initialization data
+                # Get initialization data (SPS + PPS + IDR)
                 init_data = streamer.get_initialization_data()
                 if not init_data:
                     raise RuntimeError(
-                        f"Failed to find complete SPS/PPS/IDR in {len(accumulated_buffer)} bytes"
+                        "Failed to get initialization data (missing SPS/PPS/IDR)"
                     )
 
-                # Send initialization data to first client
+                # Send initialization data as ONE message (SPS+PPS+IDR combined)
                 await websocket.send_bytes(init_data)
                 print(
-                    f"[video/stream] Sent initial data ({len(init_data)} bytes) to first client"
+                    f"[video/stream] ✓ Sent initialization data to first client: {len(init_data)} bytes total"
                 )
 
                 # Debug: Save to file
@@ -188,10 +187,23 @@ async def video_stream_ws(
                 await asyncio.sleep(0.5)
 
             if init_data:
-                await websocket.send_bytes(init_data)
+                # Log what we're sending
                 print(
-                    f"[video/stream] Sent initialization data (SPS+PPS+IDR, {len(init_data)} bytes) for device {device_id}"
+                    f"[video/stream] ✓ Sending cached initialization data for device {device_id}:"
                 )
+                print(
+                    f"  - SPS: {len(streamer.cached_sps) if streamer.cached_sps else 0}B"
+                )
+                print(
+                    f"  - PPS: {len(streamer.cached_pps) if streamer.cached_pps else 0}B"
+                )
+                print(
+                    f"  - IDR: {len(streamer.cached_idr) if streamer.cached_idr else 0}B"
+                )
+                print(f"  - Total: {len(init_data)} bytes")
+
+                await websocket.send_bytes(init_data)
+                print(f"[video/stream] ✓ Initialization data sent successfully")
 
                 # Debug: Save to file
                 if debug_file:
@@ -210,23 +222,23 @@ async def video_stream_ws(
 
     stream_failed = False
     try:
-        chunk_count = 0
+        nal_count = 0
         while True:
             try:
-                # Disable auto_cache - we only cache once during initialization
-                # Later chunks may have incomplete NAL units that would corrupt the cache
-                h264_chunk = await streamer.read_h264_chunk(auto_cache=False)
-                await websocket.send_bytes(h264_chunk)
+                # Read one complete NAL unit
+                # Each WebSocket message = one complete NAL unit (clear semantic boundary)
+                nal_unit = await streamer.read_nal_unit(auto_cache=False)
+                await websocket.send_bytes(nal_unit)
 
                 # Debug: Save to file
                 if debug_file:
-                    debug_file.write(h264_chunk)
+                    debug_file.write(nal_unit)
                     debug_file.flush()
 
-                chunk_count += 1
-                if chunk_count % 100 == 0:
+                nal_count += 1
+                if nal_count % 100 == 0:
                     print(
-                        f"[video/stream] Device {device_id}: Sent {chunk_count} chunks"
+                        f"[video/stream] Device {device_id}: Sent {nal_count} NAL units"
                     )
             except ConnectionError as e:
                 print(f"[video/stream] Device {device_id}: Connection error: {e}")
@@ -260,6 +272,6 @@ async def video_stream_ws(
     # Debug: Close file
     if debug_file:
         debug_file.close()
-        print(f"[video/stream] DEBUG: Closed debug file")
+        print("[video/stream] DEBUG: Closed debug file")
 
     print(f"[video/stream] Device {device_id}: Stream ended")

@@ -48,9 +48,6 @@ export function ScrcpyPlayer({
   const fallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
   const hasReceivedDataRef = useRef(false);
 
-  // NAL unit buffer for handling fragmented NAL units across chunks
-  const nalBufferRef = useRef<Uint8Array>(new Uint8Array(0));
-
   // Ripple effect state
   interface RippleEffect {
     id: number;
@@ -659,99 +656,6 @@ export function ScrcpyPlayer({
       setStatus('connecting');
       setErrorMessage(null);
 
-      // Helper: Find all H.264 start codes in data (0x00 0x00 0x00 0x01 or 0x00 0x00 0x01)
-      const findStartCodes = (data: Uint8Array): number[] => {
-        const positions: number[] = [];
-        for (let i = 0; i < data.length - 3; i++) {
-          if (data[i] === 0x00 && data[i + 1] === 0x00) {
-            if (data[i + 2] === 0x00 && data[i + 3] === 0x01) {
-              positions.push(i); // 4-byte start code
-              i += 3; // Skip ahead
-            } else if (data[i + 2] === 0x01) {
-              positions.push(i); // 3-byte start code
-              i += 2; // Skip ahead
-            }
-          }
-        }
-        return positions;
-      };
-
-      // Helper: Process buffered NAL units and extract complete ones
-      const processNALBuffer = (
-        newData: Uint8Array
-      ): Uint8Array | null => {
-        // Append new data to buffer
-        const combined = new Uint8Array(
-          nalBufferRef.current.length + newData.length
-        );
-        combined.set(nalBufferRef.current);
-        combined.set(newData, nalBufferRef.current.length);
-
-        // Find all start codes in combined buffer
-        const startCodes = findStartCodes(combined);
-
-        // If no start codes found, buffer the data and wait for more
-        if (startCodes.length === 0) {
-          // Prevent buffer from growing too large (max 1MB)
-          if (combined.length > 1024 * 1024) {
-            console.warn(
-              '[ScrcpyPlayer] NAL buffer overflow, clearing buffer'
-            );
-            nalBufferRef.current = new Uint8Array(0);
-            return null;
-          }
-          nalBufferRef.current = combined;
-          return null;
-        }
-
-        // CRITICAL FIX: If buffer was empty (fresh data from WebSocket)
-        // and data starts with start code, feed it directly
-        // This ensures initialization data (SPS+PPS+IDR) is not fragmented
-        const isFreshData = nalBufferRef.current.length === 0;
-        const startsWithStartCode =
-          combined[0] === 0x00 &&
-          combined[1] === 0x00 &&
-          (combined[2] === 0x00 || combined[2] === 0x01);
-
-        if (isFreshData && startsWithStartCode) {
-          // Feed complete WebSocket message directly
-          nalBufferRef.current = new Uint8Array(0);
-          console.log(
-            `[ScrcpyPlayer] Feeding fresh message (${combined.length} bytes with ${startCodes.length} NAL units) directly`
-          );
-          return combined;
-        }
-
-        // If only one start code, we don't know if the NAL unit is complete
-        // Keep buffering unless we have a lot of data
-        if (startCodes.length === 1 && combined.length < 100 * 1024) {
-          nalBufferRef.current = combined;
-          return null;
-        }
-
-        // Extract complete NAL units (from first start code to last start code)
-        let extractEnd: number;
-        if (startCodes.length === 1) {
-          // Special case: only one start code but buffer is large
-          // Assume it's complete and flush it
-          extractEnd = combined.length;
-          nalBufferRef.current = new Uint8Array(0);
-        } else {
-          // Normal case: extract up to the last start code
-          extractEnd = startCodes[startCodes.length - 1];
-          // Keep the incomplete NAL unit in buffer
-          nalBufferRef.current = combined.slice(extractEnd);
-        }
-
-        const completeData = combined.slice(0, extractEnd);
-
-        console.log(
-          `[ScrcpyPlayer] Extracted ${completeData.length} bytes, buffered ${nalBufferRef.current.length} bytes`
-        );
-
-        return completeData;
-      };
-
       // CRITICAL: Close existing WebSocket before creating new one
       // This prevents duplicate connections
       if (wsRef.current) {
@@ -779,10 +683,6 @@ export function ScrcpyPlayer({
         }
         jmuxerRef.current = null;
       }
-
-      // Clear NAL buffer on reconnect
-      nalBufferRef.current = new Uint8Array(0);
-      console.log('[ScrcpyPlayer] Cleared NAL buffer');
 
       // NOTE: Don't manually reset video.src - let jMuxer manage it
       // Manually resetting causes MEDIA_ERR_SRC_NOT_SUPPORTED errors
@@ -948,32 +848,28 @@ export function ScrcpyPlayer({
             return;
           }
 
-          // Log first message to verify initialization data
+          // Log first message (initialization data: SPS+PPS+IDR)
           if (!hasReceivedDataRef.current) {
             const data = new Uint8Array(event.data);
-            const preview = Array.from(data.slice(0, 20))
-              .map(b => b.toString(16).padStart(2, '0'))
-              .join(' ');
             console.log(
-              `[ScrcpyPlayer] First message (${data.length} bytes): ${preview}...`
+              `[ScrcpyPlayer] ✓ Received initialization data (${data.length} bytes)`
             );
 
-            // Check if initialization data contains SPS (NAL type 7) and PPS (NAL type 8)
-            const startCodes = findStartCodes(data);
-            const nalTypes = startCodes.map(pos => {
-              const nalHeader = data[pos + (data[pos + 2] === 0x01 ? 3 : 4)];
-              return nalHeader & 0x1f;
-            });
-            console.log(
-              `[ScrcpyPlayer] First message NAL types: ${nalTypes.join(', ')} (7=SPS, 8=PPS, 5=IDR)`
-            );
-
-            // Warn if missing critical initialization data
-            if (!nalTypes.includes(7) || !nalTypes.includes(8)) {
-              console.warn(
-                '[ScrcpyPlayer] WARNING: First message missing SPS/PPS! This will cause black screen.'
-              );
+            // Count NAL units in initialization data
+            let nalCount = 0;
+            for (let i = 0; i < data.length - 3; i++) {
+              if (
+                data[i] === 0x00 &&
+                data[i + 1] === 0x00 &&
+                (data[i + 2] === 0x01 ||
+                 (data[i + 2] === 0x00 && data[i + 3] === 0x01))
+              ) {
+                nalCount++;
+              }
             }
+            console.log(
+              `[ScrcpyPlayer] Initialization data contains ${nalCount} NAL units`
+            );
           }
 
           // H.264 video data received successfully
@@ -988,13 +884,13 @@ export function ScrcpyPlayer({
             }
           }
 
-          // Feed to jMuxer - direct feeding without buffering
-          // Backend now ensures complete NAL units, so no need for frontend buffering
+          // Feed to jMuxer - each WebSocket message is one complete NAL unit
+          // Backend ensures NAL unit boundaries, frontend just needs to pass through
           try {
             if (jmuxerRef.current && event.data.byteLength > 0) {
               const videoData = new Uint8Array(event.data);
 
-              // Validate that data starts with start code
+              // Validate NAL unit structure (should start with start code)
               const hasStartCode =
                 videoData[0] === 0x00 &&
                 videoData[1] === 0x00 &&
@@ -1002,11 +898,29 @@ export function ScrcpyPlayer({
 
               if (!hasStartCode) {
                 console.warn(
-                  `[ScrcpyPlayer] Data missing start code: first bytes = ${Array.from(videoData.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`
+                  `[ScrcpyPlayer] Invalid NAL unit: missing start code, first bytes = ${Array.from(videoData.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`
                 );
               }
 
-              // Feed data directly to jMuxer
+              // Extract NAL type for debugging (skip for first message which is multi-NAL init data)
+              if (hasReceivedDataRef.current) {
+                const nalHeaderOffset = videoData[2] === 0x01 ? 3 : 4;
+                const nalType = videoData[nalHeaderOffset] & 0x1f;
+
+                // Log important NAL units (SPS=7, PPS=8, IDR=5)
+                if (nalType === 5 || nalType === 7 || nalType === 8) {
+                  const typeNames: Record<number, string> = {
+                    5: 'IDR',
+                    7: 'SPS',
+                    8: 'PPS',
+                  };
+                  console.log(
+                    `[ScrcpyPlayer] Received ${typeNames[nalType]} NAL unit (${videoData.length} bytes)`
+                  );
+                }
+              }
+
+              // Feed complete NAL unit to jMuxer
               jmuxerRef.current.feed({
                 video: videoData,
               });

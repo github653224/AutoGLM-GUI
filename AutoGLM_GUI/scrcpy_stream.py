@@ -47,6 +47,9 @@ class ScrcpyStreamer:
         self.sps_pps_locked = False  # Lock SPS/PPS after initial complete capture
         # Note: IDR is NOT locked - we keep updating to the latest frame
 
+        # NAL unit reading buffer (for read_nal_unit method)
+        self._nal_read_buffer = bytearray()
+
         # Find scrcpy-server location
         self.scrcpy_server_path = self._find_scrcpy_server()
 
@@ -83,6 +86,10 @@ class ScrcpyStreamer:
 
     async def start(self) -> None:
         """Start scrcpy server and establish connection."""
+        # Clear NAL reading buffer to ensure clean state
+        self._nal_read_buffer.clear()
+        print("[ScrcpyStreamer] Cleared NAL read buffer")
+
         try:
             # 0. Kill existing scrcpy server processes on device
             print("[ScrcpyStreamer] Cleaning up existing scrcpy processes...")
@@ -407,84 +414,27 @@ class ScrcpyStreamer:
                         )
 
             elif nal_type == 5:  # IDR frame
-                # CRITICAL: Only cache COMPLETE IDR frames
-                # Incomplete IDR frames cause "error while decoding MB" errors
-                if self.cached_sps and self.cached_pps and is_complete and size >= 1024:
+                # Cache IDR if it's large enough (size check is sufficient)
+                # Note: When called from read_nal_unit(), the NAL is guaranteed complete
+                # because we extract it between two start codes. The is_complete flag
+                # is only False because the NAL is isolated (no next start code in buffer).
+                if self.cached_sps and self.cached_pps and size >= 1024:
                     is_first = self.cached_idr is None
                     self.cached_idr = nal_data
                     if is_first:
                         print(
-                            f"[ScrcpyStreamer] ✓ Cached COMPLETE IDR frame ({size} bytes)"
+                            f"[ScrcpyStreamer] ✓ Cached IDR frame ({size} bytes)"
                         )
                     # Don't log every IDR update (too verbose)
-                elif not is_complete:
-                    if size > 1024:  # Only log if it's a large incomplete IDR
-                        print(
-                            f"[ScrcpyStreamer] ⚠ Skipped INCOMPLETE IDR ({size} bytes, extends to chunk boundary)"
-                        )
                 elif size < 1024:
                     print(
-                        f"[ScrcpyStreamer] ✗ Skipped small IDR ({size} bytes)"
+                        f"[ScrcpyStreamer] ✗ Skipped small IDR ({size} bytes, likely incomplete)"
                     )
 
         # Lock SPS/PPS once we have complete initial parameters
         if self.cached_sps and self.cached_pps and not self.sps_pps_locked:
             self.sps_pps_locked = True
             print("[ScrcpyStreamer] 🔒 SPS/PPS locked (IDR will continue updating)")
-
-    def _prepend_sps_pps_to_idr(self, data: bytes) -> bytes:
-        """Prepend SPS/PPS before EVERY IDR frame unconditionally.
-
-        This ensures that clients can start decoding from any IDR frame,
-        even if they join mid-stream. We always prepend to guarantee
-        that every IDR is self-contained.
-
-        Returns:
-            Modified data with SPS/PPS prepended to all IDR frames
-        """
-        if not self.cached_sps or not self.cached_pps:
-            return data
-
-        nal_units = self._find_nal_units(data)
-        if not nal_units:
-            return data
-
-        # Find all IDR frames
-        idr_positions = [
-            (start, size)
-            for start, nal_type, size, _ in nal_units
-            if nal_type == 5
-        ]
-
-        if not idr_positions:
-            return data
-
-        # Build modified data by prepending SPS/PPS before each IDR
-        result = bytearray()
-        last_pos = 0
-        sps_pps = self.cached_sps + self.cached_pps
-
-        for idr_start, idr_size in idr_positions:
-            # Add data before this IDR
-            result.extend(data[last_pos:idr_start])
-
-            # Check if SPS/PPS already exists right before this IDR
-            # (to avoid duplicating if scrcpy already sent them)
-            prepend_offset = max(0, idr_start - len(sps_pps))
-            if data[prepend_offset:idr_start] != sps_pps:
-                # Prepend SPS/PPS before this IDR
-                result.extend(sps_pps)
-                print(
-                    f"[ScrcpyStreamer] Prepended SPS/PPS before IDR at position {idr_start}"
-                )
-
-            # Update position to start of IDR
-            last_pos = idr_start
-
-        # Add remaining data (including all IDR frames and data after)
-        result.extend(data[last_pos:])
-
-        return bytes(result)
 
     def get_initialization_data(self) -> bytes | None:
         """Get cached SPS/PPS/IDR for initializing new connections.
@@ -562,6 +512,86 @@ class ScrcpyStreamer:
                 f"[ScrcpyStreamer] Unexpected error in read_h264_chunk: {type(e).__name__}: {e}"
             )
             raise ConnectionError(f"Failed to read from socket: {e}") from e
+
+    async def read_nal_unit(self, auto_cache: bool = True) -> bytes:
+        """Read one complete NAL unit from socket.
+
+        This method ensures each returned chunk is a complete, self-contained NAL unit.
+        WebSocket messages will have clear semantic boundaries (one message = one NAL unit).
+
+        Args:
+            auto_cache: If True, automatically cache SPS/PPS/IDR from this NAL unit
+
+        Returns:
+            bytes: Complete NAL unit (including start code)
+
+        Raises:
+            ConnectionError: If socket is closed or error occurs
+        """
+        if not self.tcp_socket:
+            raise ConnectionError("Socket not connected")
+
+        while True:
+            # Look for start codes in buffer
+            buffer = bytes(self._nal_read_buffer)
+            start_positions = []
+
+            # Find all start codes (0x00 0x00 0x00 0x01 or 0x00 0x00 0x01)
+            i = 0
+            while i < len(buffer) - 3:
+                if buffer[i] == 0x00 and buffer[i + 1] == 0x00:
+                    if buffer[i + 2] == 0x00 and buffer[i + 3] == 0x01:
+                        start_positions.append(i)
+                        i += 4
+                    elif buffer[i + 2] == 0x01:
+                        start_positions.append(i)
+                        i += 3
+                    else:
+                        i += 1
+                else:
+                    i += 1
+
+            # If we have at least 2 start codes, we can extract the first NAL unit
+            if len(start_positions) >= 2:
+                # Extract first complete NAL unit (from first start code to second start code)
+                nal_unit = buffer[start_positions[0] : start_positions[1]]
+
+                # Remove extracted NAL unit from buffer
+                self._nal_read_buffer = bytearray(buffer[start_positions[1] :])
+
+                # Cache parameter sets if enabled
+                if auto_cache:
+                    self._cache_nal_units(nal_unit)
+
+                return nal_unit
+
+            # Need more data - read from socket
+            try:
+                loop = asyncio.get_event_loop()
+                chunk = await loop.run_in_executor(
+                    None, self.tcp_socket.recv, 512 * 1024
+                )
+
+                if not chunk:
+                    # Socket closed - return any remaining buffered data as final NAL unit
+                    if len(self._nal_read_buffer) > 0:
+                        final_nal = bytes(self._nal_read_buffer)
+                        self._nal_read_buffer.clear()
+                        if auto_cache:
+                            self._cache_nal_units(final_nal)
+                        return final_nal
+                    raise ConnectionError("Socket closed by remote")
+
+                # Append new data to buffer
+                self._nal_read_buffer.extend(chunk)
+
+            except ConnectionError:
+                raise
+            except Exception as e:
+                print(
+                    f"[ScrcpyStreamer] Unexpected error in read_nal_unit: {type(e).__name__}: {e}"
+                )
+                raise ConnectionError(f"Failed to read from socket: {e}") from e
 
     def stop(self) -> None:
         """Stop scrcpy server and cleanup resources."""
