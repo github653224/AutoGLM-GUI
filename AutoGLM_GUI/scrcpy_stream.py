@@ -385,7 +385,9 @@ class ScrcpyStreamer:
     async def read_media_packet(self) -> ScrcpyMediaStreamPacket:
         """Read one Scrcpy media packet (configuration/data)."""
         if not self.stream_options.send_frame_meta:
-            raise RuntimeError("send_frame_meta is disabled; packet parsing unavailable")
+            raise RuntimeError(
+                "send_frame_meta is disabled; packet parsing unavailable"
+            )
 
         if self._metadata is None:
             await self.read_video_metadata()

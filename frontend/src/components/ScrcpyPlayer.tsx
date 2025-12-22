@@ -61,8 +61,8 @@ export function ScrcpyPlayer({
   const decoderRef = useRef<WebCodecsVideoDecoder | null>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const fallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const fallbackTimerRef = useRef<number | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
   const hasReceivedDataRef = useRef(false);
   const suppressReconnectRef = useRef(false);
   const onFallbackRef = useRef(onFallback);
@@ -87,8 +87,8 @@ export function ScrcpyPlayer({
   const movedRef = useRef(false);
   const lastMoveTimeRef = useRef<number>(0);
   const pendingMoveRef = useRef<{ x: number; y: number } | null>(null);
-  const moveThrottleTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const wheelTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const moveThrottleTimerRef = useRef<number | null>(null);
+  const wheelTimeoutRef = useRef<number | null>(null);
   const accumulatedScrollRef = useRef<{ deltaY: number } | null>(null);
 
   useEffect(() => {
@@ -108,21 +108,15 @@ export function ScrcpyPlayer({
           });
         }
       } catch (error) {
-        console.error('[ScrcpyPlayer] Failed to fetch device resolution:', error);
+        console.error(
+          '[ScrcpyPlayer] Failed to fetch device resolution:',
+          error
+        );
       }
     };
 
     fetchDeviceResolution();
   }, [deviceId]);
-
-  const clearVideoContainer = useCallback(() => {
-    const container = videoContainerRef.current;
-    if (!container) return;
-    while (container.firstChild) {
-      container.removeChild(container.firstChild);
-    }
-    canvasRef.current = null;
-  }, []);
 
   const updateCanvasSize = useCallback(() => {
     const canvas = canvasRef.current;
@@ -176,26 +170,26 @@ export function ScrcpyPlayer({
 
   const createDecoder = useCallback(
     async (codecId: ScrcpyVideoCodecId) => {
-    if (!WebCodecsVideoDecoder.isSupported) {
-      throw new Error(
-        'Current browser does not support WebCodecs API. Please use the latest Chrome/Edge.'
-      );
-    }
+      if (!WebCodecsVideoDecoder.isSupported) {
+        throw new Error(
+          'Current browser does not support WebCodecs API. Please use the latest Chrome/Edge.'
+        );
+      }
 
       const { renderer, element } = await createVideoFrameRenderer();
-    canvasRef.current = element;
+      canvasRef.current = element;
 
-    if (videoContainerRef.current) {
-      clearVideoContainer();
-      videoContainerRef.current.appendChild(element);
-    }
+      // Only append if not already appended (check if canvas is in DOM)
+      if (videoContainerRef.current && !element.parentElement) {
+        videoContainerRef.current.appendChild(element);
+      }
 
-    return new WebCodecsVideoDecoder({
-      codec: codecId,
-      renderer,
-    });
+      return new WebCodecsVideoDecoder({
+        codec: codecId,
+        renderer,
+      });
     },
-    [clearVideoContainer, createVideoFrameRenderer]
+    [createVideoFrameRenderer]
   );
 
   const markDataReceived = useCallback(() => {
@@ -207,88 +201,91 @@ export function ScrcpyPlayer({
     }
   }, []);
 
-  const setupVideoStream = useCallback((_metadata: VideoMetadata) => {
-    let configurationPacketSent = false;
-    let pendingDataPackets: VideoPacket[] = [];
+  const setupVideoStream = useCallback(
+    (_metadata: VideoMetadata) => {
+      let configurationPacketSent = false;
+      let pendingDataPackets: VideoPacket[] = [];
 
-    const transformStream = new TransformStream<VideoPacket, VideoPacket>({
-      transform(packet, controller) {
-        if (packet.type === 'configuration') {
-          controller.enqueue(packet);
-          configurationPacketSent = true;
+      const transformStream = new TransformStream<VideoPacket, VideoPacket>({
+        transform(packet, controller) {
+          if (packet.type === 'configuration') {
+            controller.enqueue(packet);
+            configurationPacketSent = true;
 
-          if (pendingDataPackets.length > 0) {
-            pendingDataPackets.forEach(p => controller.enqueue(p));
-            pendingDataPackets = [];
+            if (pendingDataPackets.length > 0) {
+              pendingDataPackets.forEach(p => controller.enqueue(p));
+              pendingDataPackets = [];
+            }
+            return;
           }
-          return;
-        }
 
-        if (packet.type === 'data' && !configurationPacketSent) {
-          pendingDataPackets.push(packet);
-          return;
-        }
+          if (packet.type === 'data' && !configurationPacketSent) {
+            pendingDataPackets.push(packet);
+            return;
+          }
 
-        controller.enqueue(packet);
-      },
-    });
+          controller.enqueue(packet);
+        },
+      });
 
-    const videoStream = new ReadableStream<VideoPacket>({
-      start(controller) {
-        let streamClosed = false;
+      const videoStream = new ReadableStream<VideoPacket>({
+        start(controller) {
+          let streamClosed = false;
 
-        const videoDataHandler = (data: VideoPacket) => {
-          if (streamClosed) return;
-          try {
-            markDataReceived();
-            const payload = {
-              ...data,
-              data:
-                data.data instanceof Uint8Array
-                  ? data.data
-                  : new Uint8Array(data.data),
-            };
-            controller.enqueue(payload);
-          } catch (error) {
-            console.error('[ScrcpyPlayer] Video enqueue error:', error);
+          const videoDataHandler = (data: VideoPacket) => {
+            if (streamClosed) return;
+            try {
+              markDataReceived();
+              const payload = {
+                ...data,
+                data:
+                  data.data instanceof Uint8Array
+                    ? data.data
+                    : new Uint8Array(data.data),
+              };
+              controller.enqueue(payload);
+            } catch (error) {
+              console.error('[ScrcpyPlayer] Video enqueue error:', error);
+              streamClosed = true;
+              cleanup();
+            }
+          };
+
+          const errorHandler = (error: { message?: string }) => {
+            if (streamClosed) return;
+            controller.error(new Error(error?.message || 'Socket error'));
             streamClosed = true;
             cleanup();
-          }
-        };
+          };
 
-        const errorHandler = (error: { message?: string }) => {
-          if (streamClosed) return;
-          controller.error(new Error(error?.message || 'Socket error'));
-          streamClosed = true;
-          cleanup();
-        };
+          const disconnectHandler = () => {
+            if (streamClosed) return;
+            controller.close();
+            streamClosed = true;
+            cleanup();
+          };
 
-        const disconnectHandler = () => {
-          if (streamClosed) return;
-          controller.close();
-          streamClosed = true;
-          cleanup();
-        };
+          const cleanup = () => {
+            socketRef.current?.off('video-data', videoDataHandler);
+            socketRef.current?.off('error', errorHandler);
+            socketRef.current?.off('disconnect', disconnectHandler);
+          };
 
-        const cleanup = () => {
-          socketRef.current?.off('video-data', videoDataHandler);
-          socketRef.current?.off('error', errorHandler);
-          socketRef.current?.off('disconnect', disconnectHandler);
-        };
+          socketRef.current?.on('video-data', videoDataHandler);
+          socketRef.current?.on('error', errorHandler);
+          socketRef.current?.on('disconnect', disconnectHandler);
 
-        socketRef.current?.on('video-data', videoDataHandler);
-        socketRef.current?.on('error', errorHandler);
-        socketRef.current?.on('disconnect', disconnectHandler);
+          return () => {
+            streamClosed = true;
+            cleanup();
+          };
+        },
+      });
 
-        return () => {
-          streamClosed = true;
-          cleanup();
-        };
-      },
-    });
-
-    return videoStream.pipeThrough(transformStream);
-  }, [markDataReceived]);
+      return videoStream.pipeThrough(transformStream);
+    },
+    [markDataReceived]
+  );
 
   const disconnectDevice = useCallback((suppressReconnect = false) => {
     if (suppressReconnect) {
@@ -303,7 +300,8 @@ export function ScrcpyPlayer({
       decoderRef.current = null;
     }
 
-    clearVideoContainer();
+    // Just clear the reference, let React handle DOM cleanup
+    canvasRef.current = null;
 
     if (socketRef.current) {
       socketRef.current.disconnect();
@@ -325,7 +323,7 @@ export function ScrcpyPlayer({
     setStatus('disconnected');
     setScreenInfo(null);
     setErrorMessage(null);
-  }, [clearVideoContainer]);
+  }, []);
 
   const connectDevice = useCallback(() => {
     disconnectDevice(true);
@@ -376,7 +374,7 @@ export function ScrcpyPlayer({
 
         const videoStream = setupVideoStream(metadata);
         videoStream
-          .pipeTo(decoderRef.current.writable)
+          .pipeTo(decoderRef.current.writable as any)
           .catch((error: Error) => {
             console.error('[ScrcpyPlayer] Video stream error:', error);
           });
@@ -462,7 +460,9 @@ export function ScrcpyPlayer({
     const relativeX = clientX - rect.left;
     const relativeY = clientY - rect.top;
 
-    const streamX = Math.round((relativeX / rect.width) * streamDimensions.width);
+    const streamX = Math.round(
+      (relativeX / rect.width) * streamDimensions.width
+    );
     const streamY = Math.round(
       (relativeY / rect.height) * streamDimensions.height
     );
