@@ -25,6 +25,7 @@ export const zh = {
     cancel: '取消',
     saveConfig: '保存配置',
     noDevices: '未找到设备',
+    getApiKey: '获取 API Key',
   },
   deviceSidebar: {
     devices: '设备',

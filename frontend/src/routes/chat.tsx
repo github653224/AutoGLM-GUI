@@ -31,6 +31,7 @@ import {
   Eye,
   EyeOff,
   Server,
+  ExternalLink,
 } from 'lucide-react';
 import { useTranslation } from '../lib/i18n-context';
 
@@ -43,6 +44,7 @@ const PRESET_CONFIGS = [
       model_name: 'autoglm-phone',
       api_key: '',
     },
+    apiKeyUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
   },
   {
     name: 'modelscope',
@@ -51,6 +53,7 @@ const PRESET_CONFIGS = [
       model_name: 'ZhipuAI/AutoGLM-Phone-9B',
       api_key: '',
     },
+    apiKeyUrl: 'https://www.modelscope.cn/my/myaccesstoken',
   },
   {
     name: 'custom',
@@ -258,52 +261,65 @@ function ChatComponent() {
               </Label>
               <div className="grid grid-cols-1 gap-2">
                 {PRESET_CONFIGS.map(preset => (
-                  <button
-                    key={preset.name}
-                    type="button"
-                    onClick={() =>
-                      setTempConfig({
-                        base_url: preset.config.base_url,
-                        model_name: preset.config.model_name,
-                        api_key: preset.config.api_key,
-                      })
-                    }
-                    className={`text-left p-3 rounded-lg border transition-all ${
-                      tempConfig.base_url === preset.config.base_url &&
-                      (preset.name !== 'custom' ||
-                        (preset.name === 'custom' &&
-                          tempConfig.base_url === ''))
-                        ? 'border-[#1d9bf0] bg-[#1d9bf0]/5'
-                        : 'border-slate-200 dark:border-slate-700 hover:border-[#1d9bf0]/50 hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Server
-                        className={`w-4 h-4 ${
-                          tempConfig.base_url === preset.config.base_url &&
-                          (preset.name !== 'custom' ||
-                            (preset.name === 'custom' &&
-                              tempConfig.base_url === ''))
-                            ? 'text-[#1d9bf0]'
-                            : 'text-slate-400 dark:text-slate-500'
-                        }`}
-                      />
-                      <span className="font-medium text-sm text-slate-900 dark:text-slate-100">
+                  <div key={preset.name} className="relative">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTempConfig({
+                          base_url: preset.config.base_url,
+                          model_name: preset.config.model_name,
+                          api_key: preset.config.api_key,
+                        })
+                      }
+                      className={`w-full text-left p-3 rounded-lg border transition-all ${
+                        tempConfig.base_url === preset.config.base_url &&
+                        (preset.name !== 'custom' ||
+                          (preset.name === 'custom' &&
+                            tempConfig.base_url === ''))
+                          ? 'border-[#1d9bf0] bg-[#1d9bf0]/5'
+                          : 'border-slate-200 dark:border-slate-700 hover:border-[#1d9bf0]/50 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Server
+                          className={`w-4 h-4 ${
+                            tempConfig.base_url === preset.config.base_url &&
+                            (preset.name !== 'custom' ||
+                              (preset.name === 'custom' &&
+                                tempConfig.base_url === ''))
+                              ? 'text-[#1d9bf0]'
+                              : 'text-slate-400 dark:text-slate-500'
+                          }`}
+                        />
+                        <span className="font-medium text-sm text-slate-900 dark:text-slate-100">
+                          {
+                            t.presetConfigs[
+                              preset.name as keyof typeof t.presetConfigs
+                            ].name
+                          }
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 ml-6">
                         {
                           t.presetConfigs[
                             preset.name as keyof typeof t.presetConfigs
-                          ].name
+                          ].description
                         }
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 ml-6">
-                      {
-                        t.presetConfigs[
-                          preset.name as keyof typeof t.presetConfigs
-                        ].description
-                      }
-                    </p>
-                  </button>
+                      </p>
+                    </button>
+                    {'apiKeyUrl' in preset && (
+                      <a
+                        href={preset.apiKeyUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        className="absolute top-3 right-3 p-1.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors group"
+                        title={t.chat.getApiKey || '获取 API Key'}
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#1d9bf0] transition-colors" />
+                      </a>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>

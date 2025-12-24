@@ -25,6 +25,7 @@ export const en = {
     cancel: 'Cancel',
     saveConfig: 'Save Configuration',
     noDevices: 'No devices found',
+    getApiKey: 'Get API Key',
   },
   deviceSidebar: {
     devices: 'Devices',
