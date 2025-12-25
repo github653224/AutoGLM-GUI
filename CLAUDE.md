@@ -99,6 +99,9 @@ cd electron && npm run build
 - **macOS**: `electron/dist/AutoGLM GUI-{version}-arm64.dmg`
 - **Windows**: `electron/dist/AutoGLM GUI Setup {version}.exe` (installer)
 - **Windows**: `electron/dist/AutoGLM GUI {version}.exe` (portable)
+- **Linux**: `electron/dist/AutoGLM GUI-{version}.AppImage` (universal)
+- **Linux**: `electron/dist/autoglm-gui_{version}_amd64.deb` (Debian/Ubuntu)
+- **Linux**: `electron/dist/AutoGLM GUI-{version}.tar.gz` (portable)
 
 ## Configuration Management
 
@@ -315,7 +318,7 @@ AutoGLM-GUI can be packaged as a standalone desktop application using Electron, 
 4. **Electron Build**: electron-builder → DMG/NSIS installers
 
 **Key Features**:
-- ✅ **Cross-platform**: Windows (x64) + macOS (ARM64)
+- ✅ **Cross-platform**: Windows (x64) + macOS (ARM64) + Linux (x64)
 - ✅ **No dependencies**: Bundles Python runtime, ADB, scrcpy-server
 - ✅ **Auto-configuration**: Backend starts with bundled resources
 - ✅ **Portable mode**: Windows supports portable .exe

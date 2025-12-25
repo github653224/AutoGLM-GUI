@@ -192,7 +192,9 @@ async function startBackend() {
 
   if (!isDev) {
     // 添加 ADB 路径
-    const platform = process.platform === 'win32' ? 'windows' : 'darwin';
+    const platform = process.platform === 'win32' ? 'windows'
+                   : process.platform === 'darwin' ? 'darwin'
+                   : 'linux';
     const adbDir = path.join(getResourcePath('adb'), platform, 'platform-tools');
     env.PATH = `${adbDir}${path.delimiter}${env.PATH}`;
     console.log(`✓ ADB 路径已添加: ${adbDir}`);

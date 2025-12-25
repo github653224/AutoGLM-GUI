@@ -154,6 +154,30 @@ def update_readme_download_links(new_version: str) -> bool:
             content,
         )
 
+        # Update Linux AppImage download link
+        # Pattern: /releases/download/v{VERSION}/AutoGLM.GUI-{VERSION}.AppImage
+        content = re.sub(
+            r"/releases/download/v[\d.]+/AutoGLM\.GUI-[\d.]+\.AppImage",
+            f"/releases/download/v{new_version}/AutoGLM.GUI-{new_version}.AppImage",
+            content,
+        )
+
+        # Update Linux deb download link
+        # Pattern: /releases/download/v{VERSION}/autoglm-gui_{VERSION}_amd64.deb
+        content = re.sub(
+            r"/releases/download/v[\d.]+/autoglm-gui_[\d.]+_amd64\.deb",
+            f"/releases/download/v{new_version}/autoglm-gui_{new_version}_amd64.deb",
+            content,
+        )
+
+        # Update Linux tar.gz download link
+        # Pattern: /releases/download/v{VERSION}/AutoGLM.GUI-{VERSION}.tar.gz
+        content = re.sub(
+            r"/releases/download/v[\d.]+/AutoGLM\.GUI-[\d.]+\.tar\.gz",
+            f"/releases/download/v{new_version}/AutoGLM.GUI-{new_version}.tar.gz",
+            content,
+        )
+
         README_PATH.write_text(content, encoding="utf-8")
         print(f"Updated README.md download links to v{new_version}")
         return True
