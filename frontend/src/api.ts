@@ -176,6 +176,35 @@ export interface WiFiManualConnectResponse {
   error?: string;
 }
 
+export interface WiFiPairRequest {
+  ip: string;
+  pairing_port: number;
+  pairing_code: string;
+  connection_port?: number;
+}
+
+export interface WiFiPairResponse {
+  success: boolean;
+  message: string;
+  device_id?: string;
+  error?: string;
+}
+
+export interface MdnsDevice {
+  name: string;
+  ip: string;
+  port: number;
+  has_pairing: boolean;
+  service_type: string;
+  pairing_port?: number;
+}
+
+export interface MdnsDiscoverResponse {
+  success: boolean;
+  devices: MdnsDevice[];
+  error?: string;
+}
+
 export async function listDevices(): Promise<DeviceListResponse> {
   const res = await axios.get<DeviceListResponse>('/api/devices');
   return res.data;
@@ -213,6 +242,16 @@ export async function connectWifiManual(
 ): Promise<WiFiManualConnectResponse> {
   const res = await axios.post<WiFiManualConnectResponse>(
     '/api/devices/connect_wifi_manual',
+    payload
+  );
+  return res.data;
+}
+
+export async function pairWifi(
+  payload: WiFiPairRequest
+): Promise<WiFiPairResponse> {
+  const res = await axios.post<WiFiPairResponse>(
+    '/api/devices/pair_wifi',
     payload
   );
   return res.data;
@@ -468,5 +507,64 @@ export interface VersionCheckResponse {
 
 export async function checkVersion(): Promise<VersionCheckResponse> {
   const res = await axios.get<VersionCheckResponse>('/api/version/latest');
+  return res.data;
+}
+
+export async function discoverMdnsDevices(): Promise<MdnsDiscoverResponse> {
+  const res = await axios.get<MdnsDiscoverResponse>(
+    '/api/devices/discover_mdns'
+  );
+  return res.data;
+}
+
+// QR Code Pairing
+
+export interface QRPairGenerateResponse {
+  success: boolean;
+  qr_payload?: string;
+  session_id?: string;
+  expires_at?: number;
+  message: string;
+  error?: string;
+}
+
+export interface QRPairStatusResponse {
+  session_id: string;
+  status: string; // "listening" | "pairing" | "paired" | "connecting" | "connected" | "timeout" | "error"
+  device_id?: string;
+  message: string;
+  error?: string;
+}
+
+export interface QRPairCancelResponse {
+  success: boolean;
+  message: string;
+}
+
+export async function generateQRPairing(
+  timeout: number = 90
+): Promise<QRPairGenerateResponse> {
+  const res = await axios.post<QRPairGenerateResponse>(
+    '/api/devices/qr_pair/generate',
+    { timeout }
+  );
+  return res.data;
+}
+
+export async function getQRPairingStatus(
+  sessionId: string
+): Promise<QRPairStatusResponse> {
+  const res = await axios.get<QRPairStatusResponse>(
+    `/api/devices/qr_pair/status/${sessionId}`
+  );
+  return res.data;
+}
+
+export async function cancelQRPairing(
+  sessionId: string
+): Promise<QRPairCancelResponse> {
+  const res = await axios.delete<QRPairCancelResponse>(
+    `/api/devices/qr_pair/${sessionId}`
+  );
   return res.data;
 }

@@ -2,7 +2,8 @@
 
 from fastapi import APIRouter
 
-from AutoGLM_GUI.adb_plus import get_wifi_ip, get_device_serial
+from AutoGLM_GUI.adb_plus import get_wifi_ip, get_device_serial, pair_device
+from AutoGLM_GUI.adb_plus.qr_pair import qr_pairing_manager
 
 from AutoGLM_GUI.schemas import (
     DeviceListResponse,
@@ -12,6 +13,13 @@ from AutoGLM_GUI.schemas import (
     WiFiDisconnectResponse,
     WiFiManualConnectRequest,
     WiFiManualConnectResponse,
+    WiFiPairRequest,
+    WiFiPairResponse,
+    MdnsDiscoverResponse,
+    MdnsDeviceResponse,
+    QRPairGenerateResponse,
+    QRPairStatusResponse,
+    QRPairCancelResponse,
 )
 from AutoGLM_GUI.state import agents
 
@@ -166,3 +174,218 @@ def connect_wifi_manual(
         message=f"Successfully connected to {address}",
         device_id=address,
     )
+
+
+@router.post("/api/devices/pair_wifi", response_model=WiFiPairResponse)
+def pair_wifi(request: WiFiPairRequest) -> WiFiPairResponse:
+    """使用无线调试配对并连接到 WiFi 设备 (Android 11+)."""
+    import re
+
+    from phone_agent.adb import ADBConnection
+
+    # IP 格式验证
+    ip_pattern = r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$"
+    if not re.match(ip_pattern, request.ip):
+        return WiFiPairResponse(
+            success=False,
+            message="Invalid IP address format",
+            error="invalid_ip",
+        )
+
+    # 配对端口验证
+    if not (1 <= request.pairing_port <= 65535):
+        return WiFiPairResponse(
+            success=False,
+            message="Pairing port must be between 1 and 65535",
+            error="invalid_port",
+        )
+
+    # 连接端口验证
+    if not (1 <= request.connection_port <= 65535):
+        return WiFiPairResponse(
+            success=False,
+            message="Connection port must be between 1 and 65535",
+            error="invalid_port",
+        )
+
+    # 配对码验证 (6 位数字)
+    if not request.pairing_code.isdigit() or len(request.pairing_code) != 6:
+        return WiFiPairResponse(
+            success=False,
+            message="Pairing code must be 6 digits",
+            error="invalid_pairing_code",
+        )
+
+    conn = ADBConnection()
+
+    # 步骤 1: 配对设备
+    ok, msg = pair_device(
+        ip=request.ip,
+        port=request.pairing_port,
+        pairing_code=request.pairing_code,
+        adb_path=conn.adb_path,
+    )
+
+    if not ok:
+        return WiFiPairResponse(
+            success=False,
+            message=msg,
+            error="pair_failed",
+        )
+
+    # 步骤 2: 使用标准 ADB 端口连接到设备
+    connection_address = f"{request.ip}:{request.connection_port}"
+    ok, connect_msg = conn.connect(connection_address)
+
+    if not ok:
+        return WiFiPairResponse(
+            success=False,
+            message=f"Paired successfully but connection failed: {connect_msg}",
+            error="connect_failed",
+        )
+
+    return WiFiPairResponse(
+        success=True,
+        message=f"Successfully paired and connected to {connection_address}",
+        device_id=connection_address,
+    )
+
+
+@router.get("/api/devices/discover_mdns", response_model=MdnsDiscoverResponse)
+def discover_mdns() -> MdnsDiscoverResponse:
+    """Discover wireless ADB devices via mDNS."""
+    from phone_agent.adb import ADBConnection
+    from AutoGLM_GUI.adb_plus import discover_mdns_devices
+
+    try:
+        conn = ADBConnection()
+        devices = discover_mdns_devices(conn.adb_path)
+
+        device_responses = [
+            MdnsDeviceResponse(
+                name=dev.name,
+                ip=dev.ip,
+                port=dev.port,
+                has_pairing=dev.has_pairing,
+                service_type=dev.service_type,
+                pairing_port=dev.pairing_port,
+            )
+            for dev in devices
+        ]
+
+        return MdnsDiscoverResponse(
+            success=True,
+            devices=device_responses,
+        )
+
+    except Exception as e:
+        return MdnsDiscoverResponse(
+            success=False,
+            devices=[],
+            error=str(e),
+        )
+
+
+# QR Code Pairing Routes
+
+
+@router.post("/api/devices/qr_pair/generate", response_model=QRPairGenerateResponse)
+def generate_qr_pairing(timeout: int = 90) -> QRPairGenerateResponse:
+    """Generate QR code for wireless pairing and start mDNS listener.
+
+    Args:
+        timeout: Session timeout in seconds (default 90)
+
+    Returns:
+        QR code payload and session information
+    """
+    try:
+        from phone_agent.adb import ADBConnection
+
+        conn = ADBConnection()
+        session = qr_pairing_manager.create_session(
+            timeout=timeout, adb_path=conn.adb_path
+        )
+
+        return QRPairGenerateResponse(
+            success=True,
+            qr_payload=session.qr_payload,
+            session_id=session.session_id,
+            expires_at=session.expires_at,
+            message="QR code generated, listening for devices...",
+        )
+    except Exception as e:
+        return QRPairGenerateResponse(
+            success=False,
+            message=f"Failed to generate QR pairing: {str(e)}",
+            error="generation_failed",
+        )
+
+
+def _get_status_message(status: str) -> str:
+    """Get user-friendly message for status code."""
+    messages = {
+        "listening": "等待手机扫描二维码...",
+        "pairing": "正在配对设备...",
+        "paired": "配对成功，正在连接...",
+        "connecting": "正在建立连接...",
+        "connected": "连接成功！",
+        "timeout": "超时：未检测到设备扫码",
+        "error": "配对失败",
+    }
+    return messages.get(status, "未知状态")
+
+
+@router.get(
+    "/api/devices/qr_pair/status/{session_id}", response_model=QRPairStatusResponse
+)
+def get_qr_pairing_status(session_id: str) -> QRPairStatusResponse:
+    """Get current status of a QR pairing session.
+
+    Args:
+        session_id: Session UUID
+
+    Returns:
+        Current session status and device information if connected
+    """
+    session = qr_pairing_manager.get_session(session_id)
+
+    if not session:
+        return QRPairStatusResponse(
+            session_id=session_id,
+            status="error",
+            message="Session not found or expired",
+            error="session_not_found",
+        )
+
+    return QRPairStatusResponse(
+        session_id=session.session_id,
+        status=session.status,
+        device_id=session.device_id,
+        message=_get_status_message(session.status),
+        error=session.error_message,
+    )
+
+
+@router.delete("/api/devices/qr_pair/{session_id}", response_model=QRPairCancelResponse)
+def cancel_qr_pairing(session_id: str) -> QRPairCancelResponse:
+    """Cancel an active QR pairing session.
+
+    Args:
+        session_id: Session UUID to cancel
+
+    Returns:
+        Success status
+    """
+    success = qr_pairing_manager.cancel_session(session_id)
+
+    if success:
+        return QRPairCancelResponse(
+            success=True,
+            message="Pairing session cancelled",
+        )
+    else:
+        return QRPairCancelResponse(
+            success=False,
+            message="Session not found or already completed",
+        )
