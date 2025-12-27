@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from AutoGLM_GUI.adb_plus import get_wifi_ip, get_device_serial, pair_device
+from AutoGLM_GUI.adb_plus import get_device_serial
 from AutoGLM_GUI.adb_plus.qr_pair import qr_pairing_manager
 from AutoGLM_GUI.logger import logger
 
@@ -47,76 +47,57 @@ def list_devices() -> DeviceListResponse:
 @router.post("/api/devices/connect_wifi", response_model=WiFiConnectResponse)
 def connect_wifi(request: WiFiConnectRequest) -> WiFiConnectResponse:
     """从 USB 启用 TCP/IP 并连接到 WiFi。"""
-    from phone_agent.adb import ADBConnection, ConnectionType
+    from AutoGLM_GUI.device_manager import DeviceManager
 
-    conn = ADBConnection()
+    device_manager = DeviceManager.get_instance()
+    success, message, wifi_id = device_manager.connect_wifi(
+        device_id=request.device_id,
+        port=request.port,
+    )
 
-    # 优先使用传入的 device_id，否则取第一个在线设备
-    device_info = conn.get_device_info(request.device_id)
-    if not device_info:
-        return WiFiConnectResponse(
-            success=False,
-            message="No connected device found",
-            error="device_not_found",
-        )
+    if success:
+        # Immediately refresh device list to show new WiFi device
+        device_manager.force_refresh()
 
-    # 已经是 WiFi 连接则直接返回
-    if device_info.connection_type == ConnectionType.REMOTE:
-        address = device_info.device_id
         return WiFiConnectResponse(
             success=True,
-            message="Already connected over WiFi",
-            device_id=address,
-            address=address,
+            message=message,
+            device_id=wifi_id,
+            address=wifi_id,
         )
+    else:
+        # Determine error type from message
+        error_type = "connect"
+        if "not found" in message.lower():
+            error_type = "device_not_found"
+        elif "tcpip" in message.lower():
+            error_type = "tcpip"
+        elif "ip" in message.lower():
+            error_type = "ip"
 
-    # 1) 启用 tcpip
-    ok, msg = conn.enable_tcpip(port=request.port, device_id=device_info.device_id)
-    if not ok:
-        return WiFiConnectResponse(
-            success=False, message=msg or "Failed to enable tcpip", error="tcpip"
-        )
-
-    # 2) 读取设备 IP：先用本地 adb_plus 的 WiFi 优先逻辑，失败再回退上游接口
-    ip = get_wifi_ip(conn.adb_path, device_info.device_id) or conn.get_device_ip(
-        device_info.device_id
-    )
-    if not ip:
-        return WiFiConnectResponse(
-            success=False, message="Failed to get device IP", error="ip"
-        )
-
-    address = f"{ip}:{request.port}"
-
-    # 3) 连接 WiFi
-    ok, msg = conn.connect(address)
-    if not ok:
         return WiFiConnectResponse(
             success=False,
-            message=msg or "Failed to connect over WiFi",
-            error="connect",
+            message=message,
+            error=error_type,
         )
-
-    return WiFiConnectResponse(
-        success=True,
-        message="Switched to WiFi successfully",
-        device_id=address,
-        address=address,
-    )
 
 
 @router.post("/api/devices/disconnect_wifi", response_model=WiFiDisconnectResponse)
 def disconnect_wifi(request: WiFiDisconnectRequest) -> WiFiDisconnectResponse:
     """断开 WiFi 连接。"""
-    from phone_agent.adb import ADBConnection
+    from AutoGLM_GUI.device_manager import DeviceManager
 
-    conn = ADBConnection()
-    ok, msg = conn.disconnect(request.device_id)
+    device_manager = DeviceManager.get_instance()
+    success, message = device_manager.disconnect_wifi(request.device_id)
+
+    if success:
+        # Refresh device list to update status
+        device_manager.force_refresh()
 
     return WiFiDisconnectResponse(
-        success=ok,
-        message=msg,
-        error=None if ok else "disconnect_failed",
+        success=success,
+        message=message,
+        error=None if success else "disconnect_failed",
     )
 
 
@@ -127,119 +108,77 @@ def connect_wifi_manual(
     request: WiFiManualConnectRequest,
 ) -> WiFiManualConnectResponse:
     """手动连接到 WiFi 设备 (直接连接,无需 USB)."""
-    import re
+    from AutoGLM_GUI.device_manager import DeviceManager
 
-    from phone_agent.adb import ADBConnection
-
-    # IP 格式验证
-    ip_pattern = r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$"
-    if not re.match(ip_pattern, request.ip):
-        return WiFiManualConnectResponse(
-            success=False,
-            message="Invalid IP address format",
-            error="invalid_ip",
-        )
-
-    # 端口范围验证
-    if not (1 <= request.port <= 65535):
-        return WiFiManualConnectResponse(
-            success=False,
-            message="Port must be between 1 and 65535",
-            error="invalid_port",
-        )
-
-    conn = ADBConnection()
-    address = f"{request.ip}:{request.port}"
-
-    # 直接连接
-    ok, msg = conn.connect(address)
-    if not ok:
-        return WiFiManualConnectResponse(
-            success=False,
-            message=msg or f"Failed to connect to {address}",
-            error="connect_failed",
-        )
-
-    return WiFiManualConnectResponse(
-        success=True,
-        message=f"Successfully connected to {address}",
-        device_id=address,
+    device_manager = DeviceManager.get_instance()
+    success, message, device_id = device_manager.connect_wifi_manual(
+        ip=request.ip,
+        port=request.port,
     )
+
+    if success:
+        # Refresh device list to show new device
+        device_manager.force_refresh()
+
+        return WiFiManualConnectResponse(
+            success=True,
+            message=message,
+            device_id=device_id,
+        )
+    else:
+        # Determine error type from message
+        error_type = "connect_failed"
+        if "Invalid IP" in message:
+            error_type = "invalid_ip"
+        elif "Port must be" in message:
+            error_type = "invalid_port"
+
+        return WiFiManualConnectResponse(
+            success=False,
+            message=message,
+            error=error_type,
+        )
 
 
 @router.post("/api/devices/pair_wifi", response_model=WiFiPairResponse)
 def pair_wifi(request: WiFiPairRequest) -> WiFiPairResponse:
     """使用无线调试配对并连接到 WiFi 设备 (Android 11+)."""
-    import re
+    from AutoGLM_GUI.device_manager import DeviceManager
 
-    from phone_agent.adb import ADBConnection
-
-    # IP 格式验证
-    ip_pattern = r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$"
-    if not re.match(ip_pattern, request.ip):
-        return WiFiPairResponse(
-            success=False,
-            message="Invalid IP address format",
-            error="invalid_ip",
-        )
-
-    # 配对端口验证
-    if not (1 <= request.pairing_port <= 65535):
-        return WiFiPairResponse(
-            success=False,
-            message="Pairing port must be between 1 and 65535",
-            error="invalid_port",
-        )
-
-    # 连接端口验证
-    if not (1 <= request.connection_port <= 65535):
-        return WiFiPairResponse(
-            success=False,
-            message="Connection port must be between 1 and 65535",
-            error="invalid_port",
-        )
-
-    # 配对码验证 (6 位数字)
-    if not request.pairing_code.isdigit() or len(request.pairing_code) != 6:
-        return WiFiPairResponse(
-            success=False,
-            message="Pairing code must be 6 digits",
-            error="invalid_pairing_code",
-        )
-
-    conn = ADBConnection()
-
-    # 步骤 1: 配对设备
-    ok, msg = pair_device(
+    device_manager = DeviceManager.get_instance()
+    success, message, device_id = device_manager.pair_wifi(
         ip=request.ip,
-        port=request.pairing_port,
+        pairing_port=request.pairing_port,
         pairing_code=request.pairing_code,
-        adb_path=conn.adb_path,
+        connection_port=request.connection_port,
     )
 
-    if not ok:
+    if success:
+        # Refresh device list to show newly paired device
+        device_manager.force_refresh()
+
+        return WiFiPairResponse(
+            success=True,
+            message=message,
+            device_id=device_id,
+        )
+    else:
+        # Determine error type from message
+        error_type = "connect_failed"
+        if "Invalid IP" in message:
+            error_type = "invalid_ip"
+        elif "port must be" in message.lower():
+            error_type = "invalid_port"
+        elif "Pairing code must be" in message:
+            error_type = "invalid_pairing_code"
+        elif "connection failed" not in message.lower():
+            error_type = "pair_failed"
+
         return WiFiPairResponse(
             success=False,
-            message=msg,
-            error="pair_failed",
+            message=message,
+            error=error_type,
         )
-
-    # 步骤 2: 使用标准 ADB 端口连接到设备
-    connection_address = f"{request.ip}:{request.connection_port}"
-    ok, connect_msg = conn.connect(connection_address)
-
-    if not ok:
-        return WiFiPairResponse(
-            success=False,
-            message=f"Paired successfully but connection failed: {connect_msg}",
-            error="connect_failed",
-        )
-
-    return WiFiPairResponse(
-        success=True,
-        message=f"Successfully paired and connected to {connection_address}",
-        device_id=connection_address,
-    )
 
 
 @router.get("/api/devices/discover_mdns", response_model=MdnsDiscoverResponse)

@@ -508,3 +508,180 @@ class DeviceManager:
             f"Device polling failed (attempt {self._consecutive_failures}): {error}. "
             f"Retrying in {self._current_interval:.1f}s"
         )
+
+    # WiFi Connection Methods
+
+    def connect_wifi(
+        self, device_id: str, port: int = 5555
+    ) -> tuple[bool, str, Optional[str]]:
+        """Connect to device over WiFi (from USB connection).
+
+        Args:
+            device_id: Device ID (USB serial or IP:port)
+            port: TCP port for WiFi connection (default: 5555)
+
+        Returns:
+            Tuple of (success, message, wifi_device_id)
+        """
+        from phone_agent.adb.connection import ADBConnection, ConnectionType
+
+        from AutoGLM_GUI.adb_plus import get_wifi_ip
+
+        conn = ADBConnection(adb_path=self._adb_path)
+
+        # Get device info
+        device_info = conn.get_device_info(device_id)
+        if not device_info:
+            return (False, "No connected device found", None)
+
+        # Already WiFi connection
+        if device_info.connection_type == ConnectionType.REMOTE:
+            address = device_info.device_id
+            return (True, "Already connected over WiFi", address)
+
+        # 1) Enable tcpip
+        ok, msg = conn.enable_tcpip(port=port, device_id=device_info.device_id)
+        if not ok:
+            return (False, msg or "Failed to enable tcpip", None)
+
+        # 2) Get device IP
+        ip = get_wifi_ip(conn.adb_path, device_info.device_id) or conn.get_device_ip(
+            device_info.device_id
+        )
+        if not ip:
+            return (False, "Failed to get device IP", None)
+
+        address = f"{ip}:{port}"
+
+        # 3) Connect WiFi
+        ok, msg = conn.connect(address)
+        if not ok:
+            return (False, msg or "Failed to connect over WiFi", None)
+
+        logger.info(f"Successfully switched device {device_id} to WiFi: {address}")
+        return (True, "Switched to WiFi successfully", address)
+
+    def disconnect_wifi(self, device_id: str) -> tuple[bool, str]:
+        """Disconnect WiFi connection.
+
+        Args:
+            device_id: Device ID (IP:port)
+
+        Returns:
+            Tuple of (success, message)
+        """
+        from phone_agent.adb.connection import ADBConnection
+
+        conn = ADBConnection(adb_path=self._adb_path)
+        ok, msg = conn.disconnect(device_id)
+
+        if ok:
+            logger.info(f"Successfully disconnected WiFi device: {device_id}")
+        else:
+            logger.warning(f"Failed to disconnect WiFi device {device_id}: {msg}")
+
+        return (ok, msg)
+
+    def connect_wifi_manual(self, ip: str, port: int) -> tuple[bool, str, Optional[str]]:
+        """Manually connect to WiFi device (without USB).
+
+        Args:
+            ip: Device IP address
+            port: TCP port (1-65535)
+
+        Returns:
+            Tuple of (success, message, device_id)
+        """
+        import re
+
+        from phone_agent.adb.connection import ADBConnection
+
+        # IP format validation
+        ip_pattern = r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$"
+        if not re.match(ip_pattern, ip):
+            return (False, "Invalid IP address format", None)
+
+        # Port range validation
+        if not (1 <= port <= 65535):
+            return (False, "Port must be between 1 and 65535", None)
+
+        conn = ADBConnection(adb_path=self._adb_path)
+        address = f"{ip}:{port}"
+
+        # Direct connect
+        ok, msg = conn.connect(address)
+        if not ok:
+            return (False, msg or f"Failed to connect to {address}", None)
+
+        logger.info(f"Successfully connected to WiFi device manually: {address}")
+        return (True, f"Successfully connected to {address}", address)
+
+    def pair_wifi(
+        self, ip: str, pairing_port: int, pairing_code: str, connection_port: int
+    ) -> tuple[bool, str, Optional[str]]:
+        """Pair and connect to WiFi device using wireless debugging (Android 11+).
+
+        Args:
+            ip: Device IP address
+            pairing_port: Wireless debugging pairing port (1-65535)
+            pairing_code: 6-digit pairing code
+            connection_port: Wireless debugging connection port (1-65535)
+
+        Returns:
+            Tuple of (success, message, device_id)
+        """
+        import re
+
+        from phone_agent.adb.connection import ADBConnection
+
+        from AutoGLM_GUI.adb_plus import pair_device
+
+        # IP format validation
+        ip_pattern = r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$"
+        if not re.match(ip_pattern, ip):
+            return (False, "Invalid IP address format", None)
+
+        # Pairing port validation
+        if not (1 <= pairing_port <= 65535):
+            return (False, "Pairing port must be between 1 and 65535", None)
+
+        # Connection port validation
+        if not (1 <= connection_port <= 65535):
+            return (False, "Connection port must be between 1 and 65535", None)
+
+        # Pairing code validation (6 digits)
+        if not pairing_code.isdigit() or len(pairing_code) != 6:
+            return (False, "Pairing code must be 6 digits", None)
+
+        conn = ADBConnection(adb_path=self._adb_path)
+
+        # Step 1: Pair device
+        ok, msg = pair_device(
+            ip=ip,
+            port=pairing_port,
+            pairing_code=pairing_code,
+            adb_path=conn.adb_path,
+        )
+
+        if not ok:
+            logger.warning(f"Failed to pair WiFi device {ip}:{pairing_port}: {msg}")
+            return (False, msg, None)
+
+        # Step 2: Connect to device
+        connection_address = f"{ip}:{connection_port}"
+        ok, connect_msg = conn.connect(connection_address)
+
+        if not ok:
+            logger.warning(
+                f"Paired successfully but connection failed to {connection_address}: {connect_msg}"
+            )
+            return (
+                False,
+                f"Paired successfully but connection failed: {connect_msg}",
+                None,
+            )
+
+        logger.info(
+            f"Successfully paired and connected to WiFi device: {connection_address}"
+        )
+        return (True, f"Successfully paired and connected to {connection_address}", connection_address)
