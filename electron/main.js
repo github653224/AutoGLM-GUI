@@ -280,10 +280,40 @@ async function startBackend() {
       console.error(`后端进程异常退出 (code: ${code}, signal: ${signal})`);
       console.error('stderr 输出:', stderrOutput);
       if (!app.isQuitting) {
-        dialog.showErrorBox(
-          '后端进程已退出',
-          `后端服务异常退出 (退出码: ${code})\n\n错误信息:\n${stderrOutput.slice(-500)}`
+        // 检测是否是 Windows 上缺少 VC++ 运行库的问题
+        const isVCRedistError = process.platform === 'win32' && (
+          code === 4294967295 || // -1 的无符号表示
+          code === -1 ||
+          stderrOutput.includes('Failed to load Python DLL') ||
+          stderrOutput.includes('python3')
         );
+
+        if (isVCRedistError) {
+          // Windows VC++ 运行库缺失的友好错误提示
+          const { shell } = require('electron');
+          const response = dialog.showMessageBoxSync({
+            type: 'error',
+            title: '缺少系统组件',
+            message: '检测到缺少 Microsoft Visual C++ Redistributable',
+            detail: '后端服务无法启动，这通常是由于缺少 Microsoft Visual C++ 运行库导致的。\n\n' +
+                    '请安装 Microsoft Visual C++ 2015-2022 Redistributable (x64) 后重试。\n\n' +
+                    '点击"下载"按钮将打开官方下载页面。',
+            buttons: ['下载', '关闭'],
+            defaultId: 0,
+            cancelId: 1
+          });
+
+          if (response === 0) {
+            // 打开官方下载页面
+            shell.openExternal('https://aka.ms/vs/17/release/vc_redist.x64.exe');
+          }
+        } else {
+          // 其他错误的通用提示
+          dialog.showErrorBox(
+            '后端进程已退出',
+            `后端服务异常退出 (退出码: ${code})\n\n错误信息:\n${stderrOutput.slice(-500)}`
+          );
+        }
         app.quit();
       }
     }
