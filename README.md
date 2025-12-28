@@ -16,6 +16,8 @@ AutoGLM 手机助手的现代化 Web 图形界面 - 让 AI 自动化操作 Andro
     <strong>欢迎加入讨论交流群</strong>
   </a>
 
+[English Documentation](README_EN.md)
+
 </div>
 
 ## ✨ 特性
