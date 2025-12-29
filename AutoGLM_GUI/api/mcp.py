@@ -10,6 +10,9 @@ from AutoGLM_GUI.prompts import MCP_SYSTEM_PROMPT_ZH
 # 创建 MCP 服务器实例
 mcp = FastMCP("AutoGLM-GUI MCP Server")
 
+# MCP-specific step limit
+MCP_MAX_STEPS = 5
+
 
 @mcp.tool()
 def chat(device_id: str, message: str) -> Dict[str, Any]:
@@ -17,7 +20,8 @@ def chat(device_id: str, message: str) -> Dict[str, Any]:
     Send a task to the AutoGLM Phone Agent for execution.
 
     The agent will be automatically initialized with global configuration
-    if not already initialized.
+    if not already initialized. MCP calls use a specialized Fail-Fast prompt
+    optimized for atomic operations within 5 steps.
 
     Args:
         device_id: Device identifier (e.g., "192.168.1.100:5555" or serial)
@@ -30,62 +34,22 @@ def chat(device_id: str, message: str) -> Dict[str, Any]:
             "success": bool   # Success flag
         }
     """
-    from AutoGLM_GUI.config_manager import config_manager
     from AutoGLM_GUI.exceptions import DeviceBusyError
     from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
-    from phone_agent.agent import AgentConfig
-    from phone_agent.model import ModelConfig
 
     logger.info(f"[MCP] chat tool called: device_id={device_id}")
 
     manager = PhoneAgentManager.get_instance()
 
-    # Auto-initialize agent if not already initialized
-    if not manager.is_initialized(device_id):
-        logger.info(f"[MCP] Auto-initializing agent for device {device_id}")
-
-        # Import the shared initialization function
-        from AutoGLM_GUI.api.agents import _initialize_agent_with_config
-
-        # Get effective config from config_manager
-        effective_config = config_manager.get_effective_config()
-
-        # Check if base_url is configured
-        if not effective_config.base_url:
-            raise RuntimeError(
-                "Model configuration not set. Please configure via Settings or "
-                "start with --base-url parameter."
-            )
-
-        # Create model config from global config
-        model_config = ModelConfig(
-            base_url=effective_config.base_url,
-            api_key=effective_config.api_key,
-            model_name=effective_config.model_name,
-        )
-
-        # Create agent config with device_id, MCP-specific 5-step limit, and MCP prompt
-        agent_config = AgentConfig(
-            device_id=device_id,
-            lang="cn",  # Default language
-            max_steps=5,  # MCP-specific step limit
-            system_prompt=MCP_SYSTEM_PROMPT_ZH,  # MCP-specific Fail-Fast prompt
-        )
-
-        try:
-            # Use shared initialization function (includes ADB Keyboard setup)
-            _initialize_agent_with_config(device_id, model_config, agent_config)
-            logger.info(f"[MCP] Agent auto-initialized successfully for {device_id}")
-        except Exception as e:
-            logger.error(f"[MCP] Failed to auto-initialize agent: {e}")
-            raise RuntimeError(f"Failed to initialize agent: {str(e)}")
-
-    # 使用上下文管理器获取 agent（自动管理锁）
+    # 使用上下文管理器获取 agent（自动管理锁，自动初始化）
     try:
         with manager.use_agent(device_id, timeout=None) as agent:
-            # Temporarily override max_steps for MCP (thread-safe within device lock)
+            # Temporarily override config for MCP (thread-safe within device lock)
             original_max_steps = agent.agent_config.max_steps
-            agent.agent_config.max_steps = 5
+            original_system_prompt = agent.agent_config.system_prompt
+
+            agent.agent_config.max_steps = MCP_MAX_STEPS
+            agent.agent_config.system_prompt = MCP_SYSTEM_PROMPT_ZH
 
             try:
                 # Reset agent before each chat to ensure clean state
@@ -94,22 +58,23 @@ def chat(device_id: str, message: str) -> Dict[str, Any]:
                 result = agent.run(message)
                 steps = agent.step_count
 
-                # Check if 5-step MCP limit was reached
-                if steps >= 5 and result == "Max steps reached":
+                # Check if MCP step limit was reached
+                if steps >= MCP_MAX_STEPS and result == "Max steps reached":
                     return {
                         "result": (
-                            "已达到 MCP 最大步数限制（5步）。任务可能未完成，"
+                            f"已达到 MCP 最大步数限制（{MCP_MAX_STEPS}步）。任务可能未完成，"
                             "建议将任务拆分为更小的子任务。"
                         ),
-                        "steps": 5,
+                        "steps": MCP_MAX_STEPS,
                         "success": False,
                     }
 
                 return {"result": result, "steps": steps, "success": True}
 
             finally:
-                # Restore original max_steps
+                # Restore original config
                 agent.agent_config.max_steps = original_max_steps
+                agent.agent_config.system_prompt = original_system_prompt
 
     except DeviceBusyError:
         raise RuntimeError(f"Device {device_id} is busy. Please wait.")
