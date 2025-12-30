@@ -177,10 +177,15 @@ function ChatComponent() {
     try {
       const response = await listDevices();
 
+      // Filter out disconnected devices
+      const connectedDevices = response.devices.filter(
+        device => device.state !== 'disconnected'
+      );
+
       const deviceMap = new Map<string, Device>();
       const serialMap = new Map<string, Device[]>();
 
-      for (const device of response.devices) {
+      for (const device of connectedDevices) {
         if (device.serial) {
           const group = serialMap.get(device.serial) || [];
           group.push(device);

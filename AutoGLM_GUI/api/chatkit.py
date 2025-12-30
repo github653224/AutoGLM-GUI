@@ -292,7 +292,7 @@ class LayeredAgentRequest(BaseModel):
 
 
 @router.post("/api/layered-agent/chat")
-async def layered_agent_chat(request: LayeredAgentRequest):
+def layered_agent_chat(request: LayeredAgentRequest):
     """
     Layered agent chat API with streaming execution steps.
 
