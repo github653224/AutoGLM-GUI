@@ -248,4 +248,13 @@ export const en = {
     quickRun: 'Quick Run',
     selectWorkflow: 'Select Workflow',
   },
+  chatkit: {
+    title: 'AI Assistant',
+    layeredAgent: 'Layered Agent Mode',
+    modeLabel: 'Mode:',
+    classicMode: 'Classic',
+    layeredMode: 'Layered Agent',
+    classicModeDesc: 'Use autoglm-phone to execute tasks directly',
+    layeredModeDesc: 'Use GLM-4.7 for planning + autoglm-phone for execution',
+  },
 };

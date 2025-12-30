@@ -12,6 +12,7 @@ import {
 } from '../api';
 import { DeviceSidebar } from '../components/DeviceSidebar';
 import { DevicePanel } from '../components/DevicePanel';
+import { ChatKitPanel } from '../components/ChatKitPanel';
 import { Toast, type ToastType } from '../components/Toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -36,6 +37,8 @@ import {
   Brain,
   ChevronDown,
   ChevronRight,
+  Layers,
+  Sparkles,
 } from 'lucide-react';
 import { useTranslation } from '../lib/i18n-context';
 
@@ -80,6 +83,8 @@ function ChatComponent() {
   const [deviceThinkingModes, setDeviceThinkingModes] = useState<
     Record<string, 'fast' | 'deep'>
   >({});
+  // Chat mode: 'classic' for DevicePanel, 'chatkit' for ChatKitPanel (layered agent)
+  const [chatMode, setChatMode] = useState<'classic' | 'chatkit'>('classic');
   const [toast, setToast] = useState<{
     message: string;
     type: ToastType;
@@ -622,59 +627,98 @@ function ChatComponent() {
       />
 
       {/* Main content */}
-      <div className="flex-1 flex items-stretch justify-center min-h-0 px-4 py-4">
-        {devices.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center bg-slate-50 dark:bg-slate-950">
-            <div className="text-center">
-              <div className="flex h-20 w-20 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 mx-auto mb-4">
-                <svg
-                  className="w-10 h-10 text-slate-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
-                  />
-                </svg>
-              </div>
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
-                {t.chat.welcomeTitle}
-              </h3>
-              <p className="text-slate-500 dark:text-slate-400">
-                {t.chat.connectDevice}
-              </p>
-            </div>
-          </div>
-        ) : (
-          devices.map(device => (
-            <div
-              key={device.serial}
-              className={`w-full max-w-7xl flex items-stretch justify-center min-h-0 ${
-                device.id === currentDeviceId ? '' : 'hidden'
+      <div className="flex-1 flex flex-col min-h-0 relative">
+        {/* Mode Toggle - Floating Capsule */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
+          <div className="flex items-center gap-0.5 bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm rounded-full p-1 shadow-lg border border-slate-200 dark:border-slate-700">
+            <button
+              onClick={() => setChatMode('classic')}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                chatMode === 'classic'
+                  ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-sm'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
-              <DevicePanel
-                deviceId={device.id}
-                deviceSerial={device.serial}
-                deviceName={device.model}
-                config={config}
-                isVisible={device.id === currentDeviceId}
-                isConfigured={!!config?.base_url}
-                thinkingMode={deviceThinkingModes[device.serial] || 'fast'}
-                onThinkingModeChange={mode => {
-                  setDeviceThinkingModes(prev => ({
-                    ...prev,
-                    [device.serial]: mode,
-                  }));
-                }}
-              />
+              <Sparkles className="w-4 h-4" />
+              {t.chatkit?.classicMode || '经典模式'}
+            </button>
+            <button
+              onClick={() => setChatMode('chatkit')}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                chatMode === 'chatkit'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              {t.chatkit?.layeredMode || '分层代理'}
+            </button>
+          </div>
+        </div>
+
+        {/* Content area */}
+        <div className="flex-1 flex items-stretch justify-center min-h-0 px-4 py-4 pt-16">
+          {devices.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+              <div className="text-center">
+                <div className="flex h-20 w-20 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 mx-auto mb-4">
+                  <svg
+                    className="w-10 h-10 text-slate-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1.5}
+                      d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
+                    />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
+                  {t.chat.welcomeTitle}
+                </h3>
+                <p className="text-slate-500 dark:text-slate-400">
+                  {t.chat.connectDevice}
+                </p>
+              </div>
             </div>
-          ))
-        )}
+          ) : (
+            devices.map(device => (
+              <div
+                key={device.serial}
+                className={`w-full max-w-7xl flex items-stretch justify-center min-h-0 ${
+                  device.id === currentDeviceId ? '' : 'hidden'
+                }`}
+              >
+                {chatMode === 'classic' ? (
+                  <DevicePanel
+                    deviceId={device.id}
+                    deviceSerial={device.serial}
+                    deviceName={device.model}
+                    config={config}
+                    isVisible={device.id === currentDeviceId}
+                    isConfigured={!!config?.base_url}
+                    thinkingMode={deviceThinkingModes[device.serial] || 'fast'}
+                    onThinkingModeChange={mode => {
+                      setDeviceThinkingModes(prev => ({
+                        ...prev,
+                        [device.serial]: mode,
+                      }));
+                    }}
+                  />
+                ) : (
+                  <ChatKitPanel
+                    deviceId={device.id}
+                    deviceName={device.model}
+                    isVisible={device.id === currentDeviceId}
+                  />
+                )}
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );

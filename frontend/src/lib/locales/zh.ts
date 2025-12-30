@@ -241,4 +241,13 @@ export const zh = {
     quickRun: '快速执行',
     selectWorkflow: '选择 Workflow',
   },
+  chatkit: {
+    title: 'AI 助手',
+    layeredAgent: '分层代理模式',
+    modeLabel: '模式:',
+    classicMode: '经典模式',
+    layeredMode: '分层代理',
+    classicModeDesc: '使用 autoglm-phone 直接执行任务',
+    layeredModeDesc: '使用 GLM-4.7 规划 + autoglm-phone 执行',
+  },
 };

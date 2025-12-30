@@ -26,6 +26,7 @@ dependencies = [
     "httpx[socks]>=0.28.1",
     "loguru>=0.7.3",
     "openai>=2.9.0",
+    "openai-agents>=0.6.4",
     "pillow>=11.3.0",
     "prometheus-client>=0.21.0",
     "python-socketio>=5.11.0",
