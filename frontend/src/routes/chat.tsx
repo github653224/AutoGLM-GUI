@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import * as React from 'react';
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -98,12 +98,30 @@ const DECISION_PRESETS = [
   },
 ] as const;
 
+// Search params type for URL persistence
+type ChatSearchParams = {
+  serial?: string;
+  mode?: 'classic' | 'dual' | 'chatkit';
+};
+
 export const Route = createFileRoute('/chat')({
   component: ChatComponent,
+  validateSearch: (search: Record<string, unknown>): ChatSearchParams => {
+    const mode = search.mode;
+    return {
+      serial: typeof search.serial === 'string' ? search.serial : undefined,
+      mode:
+        mode === 'classic' || mode === 'dual' || mode === 'chatkit'
+          ? mode
+          : undefined,
+    };
+  },
 });
 
 function ChatComponent() {
   const t = useTranslation();
+  const searchParams = Route.useSearch();
+  const navigate = useNavigate();
   const [devices, setDevices] = useState<Device[]>([]);
   const [currentDeviceId, setCurrentDeviceId] = useState<string>('');
   const [configTab, setConfigTab] = useState<'vision' | 'decision'>('vision');
@@ -111,9 +129,13 @@ function ChatComponent() {
     Record<string, 'fast' | 'deep' | 'turbo'>
   >({});
   // Chat mode: 'classic' for DevicePanel (single model), 'dual' for DevicePanel (dual model), 'chatkit' for ChatKitPanel (layered agent)
+  // Initialize from URL search params if available
   const [chatMode, setChatMode] = useState<'classic' | 'dual' | 'chatkit'>(
-    'classic'
+    searchParams.mode || 'classic'
   );
+
+  // Track if we've done initial device selection from URL
+  const [initialDeviceSet, setInitialDeviceSet] = useState(false);
   const [toast, setToast] = useState<{
     message: string;
     type: ToastType;
@@ -206,8 +228,23 @@ function ChatComponent() {
       const filteredDevices = Array.from(deviceMap.values());
       setDevices(filteredDevices);
 
-      if (filteredDevices.length > 0 && !currentDeviceId) {
-        setCurrentDeviceId(filteredDevices[0].id);
+      // On initial load, try to select device from URL serial param
+      if (filteredDevices.length > 0 && !initialDeviceSet) {
+        const urlSerial = searchParams.serial;
+        if (urlSerial) {
+          const deviceFromUrl = filteredDevices.find(
+            d => d.serial === urlSerial
+          );
+          if (deviceFromUrl) {
+            setCurrentDeviceId(deviceFromUrl.id);
+          } else {
+            // URL serial not found, fallback to first device
+            setCurrentDeviceId(filteredDevices[0].id);
+          }
+        } else if (!currentDeviceId) {
+          setCurrentDeviceId(filteredDevices[0].id);
+        }
+        setInitialDeviceSet(true);
       }
 
       if (
@@ -219,7 +256,7 @@ function ChatComponent() {
     } catch (error) {
       console.error('Failed to load devices:', error);
     }
-  }, [currentDeviceId]);
+  }, [currentDeviceId, initialDeviceSet, searchParams.serial]);
 
   useEffect(() => {
     // Initial load with a small delay to avoid synchronous setState
@@ -235,6 +272,39 @@ function ChatComponent() {
       clearInterval(intervalId);
     };
   }, [loadDevices]);
+
+  // Sync state changes to URL search params
+  useEffect(() => {
+    // Get current device's serial
+    const currentDevice = devices.find(d => d.id === currentDeviceId);
+    const currentSerial = currentDevice?.serial;
+
+    // Only update URL after initial device selection is done
+    if (!initialDeviceSet) return;
+
+    // Check if URL needs updating
+    const needsUpdate =
+      currentSerial !== searchParams.serial || chatMode !== searchParams.mode;
+
+    if (needsUpdate) {
+      navigate({
+        to: '/chat',
+        search: {
+          serial: currentSerial,
+          mode: chatMode,
+        },
+        replace: true, // Don't create new history entry
+      });
+    }
+  }, [
+    currentDeviceId,
+    chatMode,
+    devices,
+    initialDeviceSet,
+    navigate,
+    searchParams.serial,
+    searchParams.mode,
+  ]);
 
   const handleSaveConfig = async () => {
     if (!tempConfig.base_url) {
