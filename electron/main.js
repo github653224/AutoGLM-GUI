@@ -50,7 +50,7 @@ function perfDiff(startMark, endMark) {
  * @param {number} maxAttempts - 最大尝试次数
  * @returns {Promise<number>} 可用端口号
  */
-async function findAvailablePort(startPort = 8000, maxAttempts = 100) {
+async function findAvailablePort(startPort = 38000, maxAttempts = 100) {
   perfMark('开始查找可用端口');
   for (let port = startPort; port < startPort + maxAttempts; port++) {
     if (await isPortAvailable(port)) {
@@ -494,7 +494,7 @@ app.whenReady().then(async () => {
     console.log(`打包模式: ${app.isPackaged ? '是' : '否'}`);
 
     // 1. 查找可用端口
-    backendPort = await findAvailablePort(8000);
+    backendPort = await findAvailablePort(38000);
     console.log(`✓ 已分配端口: ${backendPort}`);
 
     // 2. 启动后端
