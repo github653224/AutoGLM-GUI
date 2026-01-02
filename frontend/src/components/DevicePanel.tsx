@@ -243,29 +243,38 @@ export function DevicePanel({
     };
   }, []);
 
-  const handleInit = useCallback(async () => {
-    if (!config) return;
+  const handleInit = useCallback(
+    async (force: boolean = false) => {
+      if (!config) return;
 
-    try {
-      await initAgent({
-        model_config: {
-          base_url: config.base_url || undefined,
-          api_key: config.api_key || undefined,
-          model_name: config.model_name || undefined,
-        },
-        agent_config: {
-          device_id: deviceId,
-        },
-        agent_type: config.agent_type,
-        agent_config_params: config.agent_config_params,
-      });
-      setInitialized(true);
-      setError(null);
-    } catch (err) {
-      const errorMessage = getErrorMessage(err);
-      setError(errorMessage);
-    }
-  }, [deviceId, config]);
+      try {
+        await initAgent({
+          model_config: {
+            base_url: config.base_url || undefined,
+            api_key: config.api_key || undefined,
+            model_name: config.model_name || undefined,
+          },
+          agent_config: {
+            device_id: deviceId,
+          },
+          agent_type: config.agent_type,
+          agent_config_params: config.agent_config_params,
+          force,
+        });
+        setInitialized(true);
+        setError(null);
+      } catch (err) {
+        const errorMessage = getErrorMessage(err);
+        setError(errorMessage);
+        // 如果是强制重新初始化失败，后端已回滚删除了原有 agent，
+        // 需要将 initialized 设为 false 保持状态一致
+        if (force) {
+          setInitialized(false);
+        }
+      }
+    },
+    [deviceId, config]
+  );
 
   // Initialize dual model
   const handleInitDualModel = useCallback(async () => {
@@ -406,13 +415,14 @@ export function DevicePanel({
       prevConfig &&
       (prevConfig.base_url !== config.base_url ||
         prevConfig.model_name !== config.model_name ||
-        prevConfig.api_key !== config.api_key)
+        prevConfig.api_key !== config.api_key ||
+        prevConfig.agent_type !== config.agent_type)
     ) {
-      // Config changed, re-initialize
+      // Config changed, force re-initialize to apply new settings
       console.log(
-        `[DevicePanel] Config changed for device ${deviceId}, re-initializing...`
+        `[DevicePanel] Config changed for device ${deviceId}, force re-initializing...`
       );
-      handleInit();
+      handleInit(true);
     }
 
     // Update previous config
@@ -1104,7 +1114,7 @@ export function DevicePanel({
               </Badge>
             ) : !initialized ? (
               <Button
-                onClick={handleInit}
+                onClick={() => handleInit()}
                 disabled={!isConfigured || !config}
                 size="sm"
                 variant="twitter"
