@@ -1,7 +1,14 @@
 import React, { useState } from 'react';
-import { Wifi, WifiOff, Smartphone, Loader2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import {
+  Loader2,
+  Server,
+  Smartphone,
+  Trash2,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Tooltip,
   TooltipContent,
@@ -9,6 +16,7 @@ import {
 } from '@/components/ui/tooltip';
 import { ConfirmDialog } from './ConfirmDialog';
 import { useTranslation } from '../lib/i18n-context';
+import { removeRemoteDevice } from '../api';
 import type { AgentStatus } from '../api';
 
 interface DeviceCardProps {
@@ -26,7 +34,7 @@ interface DeviceCardProps {
 
 export function DeviceCard({
   id,
-  serial: _serial,
+  serial,
   model,
   status,
   connectionType,
@@ -39,6 +47,7 @@ export function DeviceCard({
   const t = useTranslation();
   const isOnline = status === 'device';
   const isUsb = connectionType === 'usb';
+  const isWifi = connectionType === 'wifi';
   const isRemote = connectionType === 'remote';
   const [loading, setLoading] = useState(false);
   const [showWifiConfirm, setShowWifiConfirm] = useState(false);
@@ -203,23 +212,39 @@ export function DeviceCard({
           {/* Right column: Connection type badges */}
           <div className="flex-shrink-0 flex flex-col items-end gap-1">
             {/* Connection type badge */}
-            {isUsb && (
-              <Badge
-                variant="outline"
-                className="text-xs border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-400"
-              >
-                USB
-              </Badge>
-            )}
-            {isRemote && (
-              <Badge
-                variant="outline"
-                className="text-xs border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-400"
-              >
-                <WifiOff className="w-2.5 h-2.5 mr-1" />
-                Remote
-              </Badge>
-            )}
+            {(() => {
+              if (isRemote) {
+                return (
+                  <Badge
+                    variant="outline"
+                    className="text-xs border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-400"
+                  >
+                    <Server className="w-2.5 h-2.5 mr-1" />
+                    {t.deviceCard.remote || 'Remote'}
+                  </Badge>
+                );
+              } else if (isWifi) {
+                return (
+                  <Badge
+                    variant="outline"
+                    className="text-xs border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-400"
+                  >
+                    <Wifi className="w-2.5 h-2.5 mr-1" />
+                    {t.deviceCard.wifi || 'WiFi'}
+                  </Badge>
+                );
+              } else if (isUsb) {
+                return (
+                  <Badge
+                    variant="outline"
+                    className="text-xs border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-400"
+                  >
+                    USB
+                  </Badge>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           {/* Action buttons */}
@@ -240,7 +265,7 @@ export function DeviceCard({
                 )}
               </Button>
             )}
-            {onDisconnectWifi && isRemote && (
+            {onDisconnectWifi && isWifi && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -253,6 +278,33 @@ export function DeviceCard({
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
                   <WifiOff className="w-3.5 h-3.5" />
+                )}
+              </Button>
+            )}
+            {isRemote && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={async e => {
+                  e.stopPropagation();
+                  setLoading(true);
+                  try {
+                    await removeRemoteDevice(serial);
+                    // Refresh will happen via polling
+                  } catch (error) {
+                    console.error('Failed to remove remote device:', error);
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+                className="h-7 w-7 text-slate-400 hover:text-red-500"
+                title={t.deviceCard.removeRemote || '移除远程设备'}
+              >
+                {loading ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5" />
                 )}
               </Button>
             )}

@@ -27,14 +27,16 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { QRCodeSVG } from 'qrcode.react';
-import type { Device, MdnsDevice } from '../api';
+import type { Device, MdnsDevice, RemoteDeviceInfo } from '../api';
 import {
+  addRemoteDevice,
+  cancelQRPairing,
   connectWifiManual,
-  pairWifi,
   discoverMdnsDevices,
+  discoverRemoteDevices,
   generateQRPairing,
   getQRPairingStatus,
-  cancelQRPairing,
+  pairWifi,
 } from '../api';
 import { useTranslation } from '../lib/i18n-context';
 import { useDebouncedState } from '@/hooks/useDebouncedState';
@@ -106,6 +108,17 @@ export function DeviceSidebar({
   const [qrSession, setQrSession] = useState<QRPairingSession | null>(null);
   const [isGeneratingQR, setIsGeneratingQR] = useState(false);
   const qrPollIntervalRef = useRef<number | null>(null);
+
+  const [remoteBaseUrl, setRemoteBaseUrl] = useState('');
+  const [remoteUrlError, setRemoteUrlError] = useState('');
+  const [isDiscoveringRemote, setIsDiscoveringRemote] = useState(false);
+  const [discoveredRemoteDevices, setDiscoveredRemoteDevices] = useState<
+    RemoteDeviceInfo[]
+  >([]);
+  const [selectedRemoteDevice, setSelectedRemoteDevice] = useState<
+    string | null
+  >(null);
+  const [isConnectingRemote, setIsConnectingRemote] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('sidebar-collapsed', JSON.stringify(isCollapsed));
@@ -330,6 +343,73 @@ export function DeviceSidebar({
       console.error('[QR Pairing] Cancel failed:', error);
     }
   }, [qrSession, stopQRStatusPolling]);
+
+  const handleDiscoverRemote = async () => {
+    setRemoteUrlError('');
+
+    if (!remoteBaseUrl.trim()) {
+      setRemoteUrlError(
+        t.deviceSidebar.remoteUrlRequired || '请输入远程服务器地址'
+      );
+      return;
+    }
+    if (
+      !remoteBaseUrl.startsWith('http://') &&
+      !remoteBaseUrl.startsWith('https://')
+    ) {
+      setRemoteUrlError(
+        t.deviceSidebar.remoteUrlInvalid ||
+          '地址必须以 http:// 或 https:// 开头'
+      );
+      return;
+    }
+
+    setIsDiscoveringRemote(true);
+    try {
+      const result = await discoverRemoteDevices({
+        base_url: remoteBaseUrl,
+        timeout: 5,
+      });
+
+      if (result.success) {
+        setDiscoveredRemoteDevices(result.devices);
+        setSelectedRemoteDevice(null);
+      } else {
+        setRemoteUrlError(result.message || '发现设备失败');
+        setDiscoveredRemoteDevices([]);
+      }
+    } catch {
+      setRemoteUrlError('连接失败，请检查地址是否正确');
+      setDiscoveredRemoteDevices([]);
+    } finally {
+      setIsDiscoveringRemote(false);
+    }
+  };
+
+  const handleAddRemoteDevice = async () => {
+    if (!selectedRemoteDevice) return;
+
+    setIsConnectingRemote(true);
+    try {
+      const result = await addRemoteDevice({
+        base_url: remoteBaseUrl,
+        device_id: selectedRemoteDevice,
+      });
+
+      if (result.success) {
+        setShowManualConnect(false);
+        setRemoteBaseUrl('');
+        setDiscoveredRemoteDevices([]);
+        setSelectedRemoteDevice(null);
+      } else {
+        setRemoteUrlError(result.message || t.toasts.remoteDeviceAddError);
+      }
+    } catch {
+      setRemoteUrlError(t.toasts.remoteDeviceAddError);
+    } finally {
+      setIsConnectingRemote(false);
+    }
+  };
 
   // Cleanup QR session when dialog closes or tab changes
   useEffect(() => {
@@ -585,12 +665,15 @@ export function DeviceSidebar({
               onValueChange={setActiveTab}
               className="w-full"
             >
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="direct">
                   {t.deviceSidebar.directConnectTab}
                 </TabsTrigger>
                 <TabsTrigger value="pair">
                   {t.deviceSidebar.pairTab}
+                </TabsTrigger>
+                <TabsTrigger value="remote">
+                  {t.deviceSidebar.remoteTab || '远程设备'}
                 </TabsTrigger>
               </TabsList>
 
@@ -1044,6 +1127,90 @@ export function DeviceSidebar({
                       : t.deviceSidebar.pairAndConnect}
                   </Button>
                 </div>
+              </TabsContent>
+
+              {/* Remote Device Tab */}
+              <TabsContent value="remote" className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="remote-url">
+                    {t.deviceSidebar.remoteUrl || '远程服务器地址'}
+                  </Label>
+                  <Input
+                    id="remote-url"
+                    placeholder="http://192.168.1.100:8001"
+                    value={remoteBaseUrl}
+                    onChange={e => {
+                      setRemoteBaseUrl(e.target.value);
+                      setRemoteUrlError('');
+                    }}
+                    disabled={isDiscoveringRemote}
+                    onKeyDown={e => e.key === 'Enter' && handleDiscoverRemote()}
+                    className={remoteUrlError ? 'border-red-500' : ''}
+                  />
+                  {remoteUrlError && (
+                    <p className="text-sm text-red-500">{remoteUrlError}</p>
+                  )}
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {t.deviceSidebar.remoteUrlHint ||
+                      '运行 Device Agent Server 的地址'}
+                  </p>
+                  <Button
+                    onClick={handleDiscoverRemote}
+                    disabled={isDiscoveringRemote || !remoteBaseUrl}
+                    className="w-full"
+                  >
+                    {isDiscoveringRemote ? '正在发现...' : '发现设备'}
+                  </Button>
+                </div>
+
+                {discoveredRemoteDevices.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>可用设备</Label>
+                    <div className="space-y-2">
+                      {discoveredRemoteDevices.map(device => (
+                        <button
+                          key={device.device_id}
+                          onClick={() =>
+                            setSelectedRemoteDevice(device.device_id)
+                          }
+                          className={`
+                            w-full rounded-lg border p-3 text-left transition-colors
+                            ${
+                              selectedRemoteDevice === device.device_id
+                                ? 'border-[#1d9bf0] bg-blue-50 dark:bg-blue-950/20'
+                                : 'border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800'
+                            }
+                          `}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Smartphone className="h-4 w-4 text-[#1d9bf0]" />
+                            <div className="flex-1">
+                              <p className="font-medium text-sm">
+                                {device.device_id}
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                {device.model} · {device.platform}
+                              </p>
+                            </div>
+                            {selectedRemoteDevice === device.device_id && (
+                              <CheckCircle className="h-4 w-4 text-[#1d9bf0]" />
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {selectedRemoteDevice && (
+                  <Button
+                    onClick={handleAddRemoteDevice}
+                    disabled={isConnectingRemote}
+                    className="w-full"
+                  >
+                    {isConnectingRemote ? '正在连接...' : '连接远程设备'}
+                  </Button>
+                )}
               </TabsContent>
             </Tabs>
 

@@ -12,6 +12,23 @@ from typing import Optional
 from phone_agent.adb.connection import ADBConnection, ConnectionType, DeviceInfo
 
 from AutoGLM_GUI.logger import logger
+from AutoGLM_GUI.types import DeviceConnectionType
+
+
+def convert_connection_type(ct: ConnectionType) -> DeviceConnectionType:
+    """Convert phone_agent ConnectionType to DeviceConnectionType.
+
+    phone_agent.ConnectionType.REMOTE is actually WiFi ADB,
+    so we map it to DeviceConnectionType.WIFI.
+    """
+    if ct == ConnectionType.USB:
+        return DeviceConnectionType.USB
+    elif ct == ConnectionType.WIFI:
+        return DeviceConnectionType.WIFI
+    elif ct == ConnectionType.REMOTE:
+        return DeviceConnectionType.WIFI
+    else:
+        return DeviceConnectionType.USB
 
 
 class DeviceState(str, Enum):
@@ -28,7 +45,7 @@ class DeviceConnection:
     """Single connection method for a device (USB, WiFi, mDNS, etc.)."""
 
     device_id: str  # USB serial OR IP:port
-    connection_type: ConnectionType
+    connection_type: DeviceConnectionType
     status: str  # "device" | "offline" | "unauthorized"
     last_seen: float = field(default_factory=time.time)
 
@@ -36,14 +53,13 @@ class DeviceConnection:
         """Calculate connection priority for sorting.
 
         Priority:
-        1. Connection type (USB > WiFi/Remote > mDNS)
+        1. Connection type (USB > WiFi > Remote)
         2. Status (device > offline > unauthorized)
         """
-        # Type priority (higher is better)
         type_priority = {
-            ConnectionType.USB: 300,
-            ConnectionType.WIFI: 200,
-            ConnectionType.REMOTE: 200,
+            DeviceConnectionType.USB: 300,
+            DeviceConnectionType.WIFI: 200,
+            DeviceConnectionType.REMOTE: 100,
         }
 
         # Status priority
@@ -98,7 +114,7 @@ class ManagedDevice:
         return self.primary_connection.status
 
     @property
-    def connection_type(self) -> ConnectionType:
+    def connection_type(self) -> DeviceConnectionType:
         """Type of primary connection."""
         return self.primary_connection.connection_type
 
@@ -153,7 +169,7 @@ def _create_managed_device(
     connections = [
         DeviceConnection(
             device_id=d.device_id,
-            connection_type=d.connection_type,
+            connection_type=convert_connection_type(d.connection_type),
             status=d.status,
             last_seen=time.time(),
         )
@@ -227,6 +243,10 @@ class DeviceManager:
         self._mdns_supported: Optional[bool] = None  # Lazy check
         self._mdns_devices: dict[str, ManagedDevice] = {}  # Key: serial
         self._enable_mdns_discovery: bool = True  # Feature toggle
+
+        # Remote device management (HTTP proxy devices)
+        self._remote_devices: dict[str, object] = {}  # Key: synthetic_serial
+        self._remote_device_configs: dict[str, dict] = {}  # Store remote device configs
 
     @classmethod
     def get_instance(cls, adb_path: str = "adb") -> DeviceManager:
@@ -312,9 +332,19 @@ class DeviceManager:
             return None
 
     def force_refresh(self) -> None:
-        """Trigger immediate device list refresh (blocking)."""
+        """Trigger immediate device list refresh (blocking).
+
+        Note: This method may fail if ADB is unavailable. Exceptions are logged
+        but not propagated to support remote-only deployments.
+        """
         logger.info("Force refreshing device list...")
-        self._poll_devices()
+        try:
+            self._poll_devices()
+        except Exception as e:
+            logger.warning(
+                f"Device poll failed during force refresh: {e}. "
+                f"This is expected in remote-only deployments without local ADB."
+            )
 
     # Internal methods
 
@@ -414,6 +444,12 @@ class DeviceManager:
 
             added_serials = current_serials - previous_serials
             removed_serials = previous_serials - current_serials
+            removed_serials = {
+                s
+                for s in removed_serials
+                if s not in self._devices
+                or self._devices[s].connection_type != DeviceConnectionType.REMOTE
+            }
             existing_serials = current_serials & previous_serials
 
             # Add new devices
@@ -441,7 +477,7 @@ class DeviceManager:
                 new_connections = [
                     DeviceConnection(
                         device_id=d.device_id,
-                        connection_type=d.connection_type,
+                        connection_type=convert_connection_type(d.connection_type),
                         status=d.status,
                         last_seen=time.time(),
                     )
@@ -531,8 +567,8 @@ class DeviceManager:
                                 connections=[
                                     DeviceConnection(
                                         device_id=f"{mdns_dev.ip}:{mdns_dev.port}",
-                                        connection_type=ConnectionType.REMOTE,
-                                        status="available",  # Not connected yet
+                                        connection_type=DeviceConnectionType.WIFI,
+                                        status="available",
                                         last_seen=time.time(),
                                     )
                                 ],
@@ -758,3 +794,151 @@ class DeviceManager:
             f"Successfully paired and connected to {connection_address}",
             connection_address,
         )
+
+    def discover_remote_devices(
+        self, base_url: str, timeout: int = 5
+    ) -> tuple[bool, str, list[dict]]:
+        """Discover devices from a remote Device Agent Server.
+
+        Args:
+            base_url: Remote Agent Server address
+            timeout: Connection timeout in seconds
+
+        Returns:
+            Tuple of (success, message, devices_list)
+        """
+        from AutoGLM_GUI.devices.remote_device import RemoteDeviceManager
+
+        base_url = base_url.strip().rstrip("/")
+        if not base_url.startswith(("http://", "https://")):
+            return (False, "base_url must start with http:// or https://", [])
+
+        try:
+            remote_manager = RemoteDeviceManager(base_url, timeout=float(timeout))
+            devices = remote_manager.list_devices()
+
+            devices_list = [
+                {
+                    "device_id": d.device_id,
+                    "model": d.model or "Unknown",
+                    "platform": d.platform,
+                    "status": d.status,
+                }
+                for d in devices
+            ]
+
+            return (True, f"Found {len(devices_list)} device(s)", devices_list)
+        except Exception as e:
+            logger.error(f"Failed to discover remote devices: {e}")
+            return (False, f"Discovery failed: {str(e)}", [])
+
+    def add_remote_device(self, base_url: str, device_id: str) -> tuple[bool, str, str]:
+        """Manually add a remote HTTP proxy device.
+
+        Args:
+            base_url: Remote Agent Server address (e.g., http://server:8001)
+            device_id: Device ID on the remote server
+
+        Returns:
+            Tuple of (success, message, synthetic_serial)
+        """
+        from AutoGLM_GUI.devices.remote_device import RemoteDevice
+
+        base_url = base_url.strip().rstrip("/")
+        if not base_url.startswith(("http://", "https://")):
+            return (False, "base_url must start with http:// or https://", "")
+
+        synthetic_serial = f"remote:{base_url}:{device_id}"
+
+        with self._devices_lock:
+            if synthetic_serial in self._devices:
+                return (False, f"Remote device {device_id} already exists", "")
+
+            try:
+                remote_device = RemoteDevice(device_id, base_url)
+                remote_device.get_screenshot(timeout=5)
+
+                managed = ManagedDevice(
+                    serial=synthetic_serial,
+                    connections=[
+                        DeviceConnection(
+                            device_id=f"{base_url}|{device_id}",
+                            connection_type=DeviceConnectionType.REMOTE,
+                            status="device",
+                            last_seen=time.time(),
+                        )
+                    ],
+                    model=device_id,
+                    state=DeviceState.ONLINE,
+                )
+
+                self._devices[synthetic_serial] = managed
+                self._remote_devices[synthetic_serial] = remote_device
+                self._remote_device_configs[synthetic_serial] = {
+                    "base_url": base_url,
+                    "device_id": device_id,
+                }
+
+                self._device_id_to_serial[managed.primary_device_id] = synthetic_serial
+
+                logger.info(f"Remote device added: {synthetic_serial}")
+                return (True, "Remote device added successfully", synthetic_serial)
+
+            except Exception as e:
+                logger.error(f"Failed to connect to remote device: {e}")
+                return (False, f"Connection failed: {str(e)}", "")
+
+    def remove_remote_device(self, serial: str) -> tuple[bool, str]:
+        """Remove a remote device.
+
+        Args:
+            serial: Synthetic serial of the remote device (remote:...)
+
+        Returns:
+            Tuple of (success, message)
+        """
+        with self._devices_lock:
+            if serial not in self._devices:
+                return (False, "Remote device not found")
+
+            managed = self._devices.get(serial)
+            if not managed or managed.connection_type != DeviceConnectionType.REMOTE:
+                return (False, "Not a remote device")
+
+            managed = self._devices.pop(serial)
+            remote_device = self._remote_devices.pop(serial, None)
+            self._remote_device_configs.pop(serial, None)
+
+            for conn in managed.connections:
+                self._device_id_to_serial.pop(conn.device_id, None)
+
+            if remote_device:
+                try:
+                    remote_device.close()  # type: ignore
+                except Exception as e:
+                    logger.warning(f"Error closing remote device: {e}")
+
+            logger.info(f"Remote device removed: {serial}")
+            return (True, "Remote device removed successfully")
+
+    def get_remote_device_instance(self, serial: str) -> object | None:
+        """Get RemoteDevice instance for device adapter injection.
+
+        Args:
+            serial: Synthetic serial of the remote device
+
+        Returns:
+            RemoteDevice instance or None if not found
+        """
+        return self._remote_devices.get(serial)
+
+    def get_serial_by_device_id(self, device_id: str) -> str | None:
+        """Get serial by device_id (reverse lookup).
+
+        Args:
+            device_id: Device ID from connections
+
+        Returns:
+            Serial (synthetic or ADB) or None if not found
+        """
+        return self._device_id_to_serial.get(device_id)

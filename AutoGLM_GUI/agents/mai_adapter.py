@@ -367,6 +367,9 @@ class MAIAgentAdapter:
 
             # Special handling for Enter key
             # ActionHandler doesn't have an "Enter" handler, so we handle it directly here
+            # TODO: Hardcoded ADB command - incompatible with RemoteDevice
+            # Should use DeviceProtocol unified interface (e.g., device.type_text("\n"))
+            # Priority: Low (handle after RemoteDevice integration complete)
             if button_name == "enter":
                 # Use platform_utils to run ADB keyevent command
                 from AutoGLM_GUI.platform_utils import run_cmd_silently_sync
@@ -625,3 +628,12 @@ class MAIAgentAdapter:
     def step_count(self) -> int:
         """Return current step count."""
         return self._step_count
+
+    def abort(self) -> None:
+        """Abort current task (no-op for MAI Agent)."""
+        pass
+
+    @property
+    def is_running(self) -> bool:
+        """Check if agent is running (always False for MAI Agent)."""
+        return False
