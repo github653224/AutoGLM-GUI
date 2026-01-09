@@ -649,8 +649,7 @@ scrcpy-server-v3.3.3   # Scrcpy server binary (bundled)
 8. **ADB Command Execution**: Always use `platform_utils.py` functions instead of direct subprocess calls
 9. **Device ID vs Serial**: Remember `device_id` changes with connection type, `serial` is stable
 10. **Concurrent Execution**: PhoneAgentManager prevents concurrent tasks on same device - respect the locks
-11. **Legacy Code**: `mai_agent` directory is third-party legacy code kept for reference only - use internal agents in `AutoGLM_GUI/agents/`
-12. **Respecting Domain Boundaries**:
+11. **Respecting Domain Boundaries**:
     - PhoneAgentManager should only deal with device_id (not serial)
     - DeviceManager should only deal with device connections (not agents)
     - API layer coordinates between domains using public interfaces only
@@ -710,7 +709,6 @@ scrcpy-server-v3.3.3   # Scrcpy server binary (bundled)
    - Downloads artifacts from Actions tab
 
 ### Important Notes
-- **Legacy Directory**: `mai_agent` is third-party code, do NOT modify
 - **Encoding**: Use PyInstaller runtime hook for Windows UTF-8, not application code
 - **Resources**: Always check `sys._MEIPASS` exists in PyInstaller environment
 - **ADB**: Use `AutoGLM_GUI/platform_utils.py` for executing commands

@@ -6,7 +6,6 @@ Guide for AI agents working in this codebase.
 
 **Python**: `uv run python` (NEVER use raw `python`)
 **Frontend**: `pnpm` in `frontend/` directory
-**Note**: `mai_agent` is now internally implemented (see `AutoGLM_GUI/agents/mai/`)
 
 ## Configuration System
 
@@ -109,12 +108,11 @@ export async function listDevices(): Promise<DeviceListResponse> {
 
 ## Critical Constraints
 
-### NEVER Modify Third-Party Code
+### Agent Implementations
 
-The project uses internal agent implementations in `AutoGLM_GUI/agents/`.
-
-**Note**: `mai_agent/` is legacy third-party code kept for reference only.
-Use `AutoGLM_GUI/agents/mai/` for MAI Agent modifications.
+The project uses internal agent implementations in `AutoGLM_GUI/agents/`:
+- `AutoGLM_GUI/agents/glm/` - GLM Agent
+- `AutoGLM_GUI/agents/mai/` - MAI Agent
 
 ### Type Safety (FORBIDDEN)
 
@@ -165,12 +163,12 @@ AutoGLM_GUI/           # Backend - FastAPI app
   api/                 # Route handlers (modular)
   adb_plus/            # Extended ADB utilities
   agents/              # Internal agent implementations (GLM, MAI)
+    glm/               # GLM Agent implementation
+    mai/               # MAI Agent implementation
   exceptions.py        # Custom exceptions
   logger.py            # Loguru config
   phone_agent_manager.py  # Agent lifecycle
   platform_utils.py    # Cross-platform utils
-
-mai_agent/             # Legacy third-party code (kept for reference)
 
 frontend/src/          # React frontend
   routes/              # TanStack Router pages
