@@ -6,7 +6,6 @@ on:
     paths:
       - 'Dockerfile'
       - 'AutoGLM_GUI/**'
-      - 'phone_agent/**'
       - 'tests/integration/**'
       - 'pyproject.toml'
       - '.github/workflows/docker-e2e.yml'

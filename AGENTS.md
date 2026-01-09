@@ -4,10 +4,9 @@ Guide for AI agents working in this codebase.
 
 ## Quick Reference
 
-**Python**: `uv run python` (NEVER use raw `python`)  
-**Frontend**: `pnpm` in `frontend/` directory  
-**DO NOT** modify `phone_agent/` - third-party code  
-**Note**: `mai_agent` is now internally implemented (see `AutoGLM_GUI/agents/internal_mai_agent.py`)
+**Python**: `uv run python` (NEVER use raw `python`)
+**Frontend**: `pnpm` in `frontend/` directory
+**Note**: `mai_agent` is now internally implemented (see `AutoGLM_GUI/agents/mai/`)
 
 ## Configuration System
 
@@ -18,8 +17,6 @@ AutoGLM-GUI uses its own configuration system, independent of any third-party co
 - `AutoGLM_GUI.config.ModelConfig`: Model API configuration
 - `AutoGLM_GUI.config.AgentConfig`: Agent behavior configuration
 - `AutoGLM_GUI.config.StepResult`: Execution result type
-
-**Important**: Always use `AutoGLM_GUI.config` types in business logic. The system is fully decoupled from the legacy `phone_agent` classes.
 
 ## Build / Lint / Test Commands
 
@@ -114,11 +111,10 @@ export async function listDevices(): Promise<DeviceListResponse> {
 
 ### NEVER Modify Third-Party Code
 
-`phone_agent/` is third-party legacy code (kept for reference only).
-The project now uses internal agent implementations in `AutoGLM_GUI/agents/`.
+The project uses internal agent implementations in `AutoGLM_GUI/agents/`.
 
-**Note**: `mai_agent/` was third-party but is now fully internalized.  
-Use `AutoGLM_GUI/agents/internal_mai_agent.py` for MAI Agent modifications.
+**Note**: `mai_agent/` is legacy third-party code kept for reference only.
+Use `AutoGLM_GUI/agents/mai/` for MAI Agent modifications.
 
 ### Type Safety (FORBIDDEN)
 
@@ -168,19 +164,16 @@ def test_feature(client):
 AutoGLM_GUI/           # Backend - FastAPI app
   api/                 # Route handlers (modular)
   adb_plus/            # Extended ADB utilities
-  dual_model/          # Decision + vision model coordination
+  agents/              # Internal agent implementations (GLM, MAI)
   exceptions.py        # Custom exceptions
   logger.py            # Loguru config
   phone_agent_manager.py  # Agent lifecycle
   platform_utils.py    # Cross-platform utils
 
-phone_agent/           # Third-party - DO NOT MODIFY
-mai_agent/             # Legacy third-party code (internalized, kept for reference)
+mai_agent/             # Legacy third-party code (kept for reference)
 
 frontend/src/          # React frontend
   routes/              # TanStack Router pages
   components/          # UI components
   api.ts               # API client
 ```
-
-- phone_agent 已经被弃用，请在本项目下的代码寻找替代
