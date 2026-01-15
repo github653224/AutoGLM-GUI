@@ -151,10 +151,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Pre-clean mounted images
+      - name: Pre-clean mounted images and disable Spotlight
         run: |
+          # Disable Spotlight indexing to prevent mds interference
+          sudo mdutil -a -i off || true
+          # Kill any mds processes that might be accessing disk images
+          sudo pkill -9 mds || true
+          sudo pkill -9 mds_stores || true
+          # Unmount all mounted disk images
           hdiutil info | awk '/\/dev\/disk[0-9]+/ {print $1}' | xargs -n1 -I{} hdiutil detach -force -quiet {} || true
-          sleep 2
+          # Give the system time to clean up resources
+          sleep 5
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -242,13 +249,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Disable Spotlight indexing
+      - name: Disable Spotlight indexing and clean mounted images
         run: |
-          # Disable Spotlight indexing to prevent hdiutil resource busy errors
+          # Disable Spotlight indexing to prevent mds interference
           sudo mdutil -a -i off || true
           # Kill any mds processes that might be accessing disk images
           sudo pkill -9 mds || true
           sudo pkill -9 mds_stores || true
+          # Unmount all mounted disk images
+          hdiutil info | awk '/\/dev\/disk[0-9]+/ {print $1}' | xargs -n1 -I{} hdiutil detach -force -quiet {} || true
+          # Give the system time to clean up resources
+          sleep 5
 
       - name: Setup Python
         uses: actions/setup-python@v5
