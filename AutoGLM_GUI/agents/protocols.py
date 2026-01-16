@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, Protocol
 
 from AutoGLM_GUI.config import AgentConfig, ModelConfig, StepResult
 
@@ -76,19 +76,8 @@ class AsyncAgent(Protocol):
         """
         ...
 
-    async def step(self, task: str | None = None) -> StepResult:
-        """执行单步，返回步骤结果。
-
-        Args:
-            task: 任务描述（首步必需，后续可选）
-
-        Returns:
-            StepResult: 步骤结果
-        """
-        ...
-
-    async def stream(self, task: str) -> AsyncIterator[dict[str, Any]]:
-        """流式执行任务，yield 事件字典。
+    def stream(self, task: str) -> Any:
+        """流式执行任务，返回异步生成器。
 
         这是核心方法，支持:
         - 实时流式输出 (thinking chunks)
