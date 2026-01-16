@@ -168,7 +168,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     acquired = False
     try:
         acquired = await asyncio.to_thread(
-            manager.acquire_device, device_id, timeout=None, auto_initialize=False
+            manager.acquire_device, device_id, timeout=None, auto_initialize=True
         )
         # Use chat context with async agent
         agent = await asyncio.to_thread(
@@ -247,7 +247,7 @@ async def chat_stream(request: ChatRequest):
                 device_id,
                 timeout=0,
                 raise_on_timeout=True,
-                auto_initialize=False,
+                auto_initialize=True,
             )
 
             try:
