@@ -30,6 +30,13 @@ const sidebars: SidebarsConfig = {
       ],
     },
     'development',
+    {
+      type: 'category',
+      label: '技术文档',
+      items: [
+        'layered-agent-analysis',
+      ],
+    },
     'deployment',
     'upgrade',
     'license',
